@@ -160,20 +160,3 @@ def search(question: str, config: LoaderConfig, vector_store: VectorStore):
         raise
 
 
-if __name__ == '__main__':
-    # Test the search functionality
-    try:
-        question = 'What is the main topic of the document?'
-        semantic_results, rag_result = search(question)
-
-        logger.info('\nTest Search Results:')
-        logger.info(f'Query: {question}')
-        logger.info('\nSemantic Search Results:')
-        for i, doc in enumerate(semantic_results, 1):
-            logger.info(f'\n{i}. {doc.page_content[:200]}...')
-
-        logger.info('\nRAG Response:')
-        logger.info(rag_result['result'])
-
-    except Exception as e:
-        logger.error(f'Error in test: {str(e)}')

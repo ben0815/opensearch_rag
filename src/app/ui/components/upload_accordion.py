@@ -42,23 +42,19 @@ async def preview_pdf(files: list[str]) -> list[gr.Image]:
     images = []
     try:
         for file_idx, file in enumerate(files):
-            doc = fitz.open(file)
-            logger.info(
-                f'Generating preview for PDF {file_idx + 1} with {doc.page_count} pages',
-            )
-
-            for page in doc:
-                # Convert page to image
-                pix = page.get_pixmap(
-                    matrix=fitz.Matrix(2, 2),
-                )  # 2x zoom for better quality
-                # Create preview image path
-                image_path = IMAGES_DIR / f'doc_{file_idx}_page_{page.number}.png'
-                pix.save(str(image_path))
-                images.append(str(image_path))
-                logger.debug(
-                    f'Generated preview for document {file_idx + 1}, page {page.number}',
+            with fitz.open(file) as doc:
+                logger.info(
+                    f'Generating preview for PDF {file_idx + 1} with {doc.page_count} pages',
                 )
+
+                for page in doc:
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                    image_path = IMAGES_DIR / f'doc_{file_idx}_page_{page.number}.png'
+                    pix.save(str(image_path))
+                    images.append(str(image_path))
+                    logger.debug(
+                        f'Generated preview for document {file_idx + 1}, page {page.number}',
+                    )
 
         return images
     except Exception as e:

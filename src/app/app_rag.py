@@ -1,6 +1,7 @@
 """Main application entry point."""
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -10,7 +11,10 @@ from app.query_processor import QueryProcessor
 from app.ui.main import create_interface
 from app.utils.logging_config import setup_logger
 
-load_dotenv()
+# In Docker: ENV_FILE points to /app/secrets/.env (override values only).
+# Locally: fall back to infra/.env relative to the project root.
+_env_file = os.getenv('ENV_FILE') or str(Path(__file__).resolve().parents[2] / 'infra' / '.env')
+load_dotenv(_env_file, override=False)
 logger = setup_logger(__name__)
 
 

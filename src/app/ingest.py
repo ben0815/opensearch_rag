@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# In Docker: ENV_FILE points to /app/secrets/.env (override values only).
+# Locally: fall back to infra/.env relative to the project root.
+_env_file = os.getenv('ENV_FILE') or str(Path(__file__).resolve().parents[2] / 'infra' / '.env')
+load_dotenv(_env_file, override=False)
 
 from app.loader import DocumentProcessor, LoaderConfig, VectorStore  # noqa: E402
 from app.utils.logging_config import setup_logger  # noqa: E402

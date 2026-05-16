@@ -2,8 +2,7 @@
 
 services:
   opensearch:
-    #image: opensearchproject/opensearch:2.11.1
-    image: opensearchproject/opensearch:latest
+    image: opensearchproject/opensearch:2.19.1
     container_name: opensearch
     environment:
       - cluster.name=opensearch-cluster
@@ -33,10 +32,10 @@ services:
       timeout: 10s
       retries: 5
       start_period: 40s
+    restart: unless-stopped
 
   opensearch-dashboards:
-    #image: opensearchproject/opensearch-dashboards:2.11.1
-    image: opensearchproject/opensearch-dashboards:latest
+    image: opensearchproject/opensearch-dashboards:2.19.1
     container_name: opensearch-dashboards
     ports:
       - "5601:5601"
@@ -54,6 +53,7 @@ services:
     depends_on:
       opensearch:
         condition: service_healthy
+    restart: unless-stopped
 
 #  ollama:
 #    build:
@@ -107,30 +107,28 @@ services:
       - ENV_FILE=/app/secrets/.env
       - GRADIO_ALLOWED_ORIGINS=["*"]
       # Service connections
-      - OLLAMA_HOST=http://host.docker.internal:11434
-      - EMBEDDINGS_MODEL=mxbai-embed-large
-      - LLM_MODEL=qwen3.5:122b
-      - EMBEDDER_TYPE=ollama
-      - LLM_TYPE=ollama
-      - OPENSEARCH_URL=http://opensearch:9200
-      - OPENSEARCH_USERNAME=admin
-      - OPENSEARCH_PASSWORD=admin
-      - OPENSEARCH_INDEX_NAME=documents
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-mxbai-embed-large}
+      - LLM_MODEL=${LLM_MODEL:-qwen3.5:122b}
+      - EMBEDDER_TYPE=${EMBEDDER_TYPE:-ollama}
+      - LLM_TYPE=${LLM_TYPE:-ollama}
+      - OPENSEARCH_URL=${OPENSEARCH_URL:-http://opensearch:9200}
+      - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME:-admin}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-admin}
+      - OPENSEARCH_INDEX_NAME=${OPENSEARCH_INDEX_NAME:-documents}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
       # Processing settings
-      - EMBEDDING_PROVIDER=ollama
-      - EMBEDDING_SIZE=1024
-      - CHUNK_SIZE=500
-      - CHUNK_OVERLAP=100
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - EMBEDDING_SIZE=${EMBEDDING_SIZE:-1024}
+      - CHUNK_SIZE=${CHUNK_SIZE:-500}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}
       # Debug settings
       - PYTHONUNBUFFERED=1
     volumes:
       - ../src:/app/src
       - ./logs:/app/logs
       - ./secrets:/app/secrets
-    secrets:
-      - app_env
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081 || exit 1"]
       interval: 30s
@@ -183,7 +181,3 @@ volumes:
 networks:
   opensearch-network:
     driver: bridge
-
-secrets:
-  app_env:
-    file: secrets/.env

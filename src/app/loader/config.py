@@ -12,9 +12,8 @@ class LoaderConfig:
 
     SUPPORTED_PROVIDERS = Literal['openai', 'ollama']
 
-    def __init__(self, config: dict[str, Any] = None):
-        """Initialize configuration."""
-        config = config or {}
+    def __init__(self):
+        """Initialize configuration from environment variables."""
         # Provider selection
         self.embedding_provider = os.getenv('EMBEDDING_PROVIDER', 'ollama').lower()
         if self.embedding_provider not in ['openai', 'ollama']:
@@ -31,6 +30,12 @@ class LoaderConfig:
         self.embedder_type = os.getenv('EMBEDDER_TYPE', 'ollama')
         self.llm_type = os.getenv('LLM_TYPE', 'ollama')
 
+        # AWS Bedrock settings (only required when embedder_type/llm_type == 'bedrock')
+        self.bedrock_model_id = os.getenv('BEDROCK_MODEL_ID', '')
+        self.region_name = os.getenv('AWS_REGION', 'us-east-1')
+        self.endpoint_url = os.getenv('AWS_ENDPOINT_URL', '')
+        self.model_id = os.getenv('BEDROCK_LLM_MODEL_ID', '')
+
         # General settings
         self.chunk_size = int(os.getenv('CHUNK_SIZE', '500'))
         self.chunk_overlap = int(os.getenv('CHUNK_OVERLAP', '100'))
@@ -39,7 +44,8 @@ class LoaderConfig:
             'SUPPORTED_EXTENSIONS',
             '.txt,.md,.py,.pdf',
         ).split(',')
-        self.embedding_size = int(os.getenv('EMBEDDING_SIZE', '3072'))
+        # mxbai-embed-large produces 1024-dimensional vectors
+        self.embedding_size = int(os.getenv('EMBEDDING_SIZE', '1024'))
         self.opensearch_url = os.getenv('OPENSEARCH_URL', 'http://localhost:9200')
         self.opensearch_username = os.getenv('OPENSEARCH_USERNAME', 'admin')
         self.opensearch_password = os.getenv('OPENSEARCH_PASSWORD', 'admin')

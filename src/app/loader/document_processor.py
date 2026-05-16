@@ -39,9 +39,11 @@ class DocumentProcessor:
 
         Args:
             config: Optional loader configuration
-            vector_store: Optional vector store instance
+            vector_store: VectorStore instance (required for ingestion)
         """
         self.config = config or LoaderConfig()
+        if vector_store is None:
+            raise ValueError('vector_store is required for DocumentProcessor')
         self.vector_store = vector_store
         self.metadata_service = RedisMetadataService(
             host=self.config.redis_host,
@@ -63,14 +65,7 @@ class DocumentProcessor:
         self,
         chunk: Document,
     ) -> None:
-        """
-        Process a single document chunk in parallel.
-
-        Args:
-            chunk: Document chunk to process
-            embeddings_manager: Embeddings manager instance
-            vector_store: Vector store instance
-        """
+        """Embed and store a single document chunk."""
         # Hard truncation: mxbai-embed-large has 512 token context.
         # 450 chars ≈ 300 tokens worst-case (German/dense text), safe for all languages.
         content = chunk.page_content[:450]
@@ -85,8 +80,6 @@ class DocumentProcessor:
         self,
         text: str,
         metadata: dict,
-        chunk_size: int = 500,  # Reduced chunk size for better granularity
-        chunk_overlap: int = 100,  # Adjusted overlap
     ):
         """
         Process document text in parallel with chunking and embedding.
@@ -94,15 +87,13 @@ class DocumentProcessor:
         Args:
             text: Document text to process
             metadata: Document metadata
-            chunk_size: Size of text chunks (default: 500)
-            chunk_overlap: Overlap between chunks (default: 100)
 
         Yields:
             Progress percentage
         """
         chunk_splitter = ChunkSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
+            chunk_size=self.config.chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
         )
         chunks = chunk_splitter.split_into_chunks(text, metadata)
         enhanced_chunks = chunk_splitter.add_neighbouring_content(chunks)
@@ -142,7 +133,7 @@ class DocumentProcessor:
         if processed > 0:
             yield 100.0
 
-    async def load_documents(self, file_path: Path):
+    async def load_documents(self, file_path: Path | str):
         """
         Load documents and store in vector database.
 
@@ -153,11 +144,19 @@ class DocumentProcessor:
             Progress percentage (float between 0 and 100)
         """
         try:
+            file_path = Path(file_path)
             # Get total pages and file info
             total_pages = 0
             chunk_count = 0
             file_size = os.path.getsize(file_path)
             file_hash = await self._calculate_file_hash(file_path)
+
+            # Skip if already indexed
+            existing = await self.metadata_service.get_document_metadata(file_hash)
+            if existing:
+                logger.info(f'Skipping already-indexed document: {file_path.name}')
+                yield 100.0
+                return
 
             with fitz.open(str(file_path)) as doc:
                 total_pages = len(doc)

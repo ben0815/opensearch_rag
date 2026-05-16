@@ -5,8 +5,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.loader.config import LoaderConfig
 
-from dotenv import load_dotenv
-from langchain_aws import BedrockEmbeddings
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import OpenSearchVectorSearch
 from opensearchpy import OpenSearch, RequestsHttpConnection
@@ -14,8 +12,6 @@ from opensearchpy import OpenSearch, RequestsHttpConnection
 from app.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
-
-load_dotenv()
 
 
 class VectorStore:
@@ -29,6 +25,7 @@ class VectorStore:
 
     def get_embeddings(self):
         if self.embedder_type == 'bedrock':
+            from langchain_aws import BedrockEmbeddings
             return BedrockEmbeddings(
                 model_id=self.config.bedrock_model_id,
             )
@@ -73,7 +70,7 @@ class VectorStore:
                 'index': {
                     'knn': True,
                     'number_of_shards': 1,
-                    'number_of_replicas': 1,
+                    'number_of_replicas': 0,
                     'refresh_interval': '1s',
                     'analysis': {
                         'analyzer': {
