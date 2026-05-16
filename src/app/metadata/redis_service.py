@@ -77,7 +77,7 @@ class RedisMetadataService:
                 await self.connect()
 
             key = f'{self.doc_metadata_key}{doc_id}'
-            await self._redis.set(key, metadata.json())
+            await self._redis.set(key, metadata.model_dump_json())
 
             # Add to document index set
             await self._redis.sadd('indexed_documents', doc_id)
@@ -107,7 +107,7 @@ class RedisMetadataService:
             data = await self._redis.get(key)
 
             if data:
-                return DocumentMetadata.parse_raw(data)
+                return DocumentMetadata.model_validate_json(data)
             return None
         except Exception as e:
             logger.error(f'Error retrieving document metadata: {e}')
@@ -124,16 +124,18 @@ class RedisMetadataService:
             if not self._redis:
                 await self.connect()
 
-            # Get all document IDs from index
             doc_ids = await self._redis.smembers('indexed_documents')
-            documents = []
+            if not doc_ids:
+                return []
 
-            for doc_id in doc_ids:
-                metadata = await self.get_document_metadata(doc_id)
-                if metadata:
-                    documents.append(metadata)
+            keys = [f'{self.doc_metadata_key}{doc_id}' for doc_id in doc_ids]
+            values = await self._redis.mget(*keys)
 
-            return documents
+            return [
+                DocumentMetadata.model_validate_json(v)
+                for v in values
+                if v is not None
+            ]
         except Exception as e:
             logger.error(f'Error retrieving all documents: {e}')
             return []

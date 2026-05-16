@@ -2,8 +2,10 @@ import re
 from datetime import datetime
 from typing import Any
 
-from langchain.docstore.document import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+#from langchain.docstore.document import Document
+from langchain_core.documents import Document
+#from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.utils.logging_config import setup_logger
 
@@ -160,9 +162,14 @@ class ChunkSplitter:
                 'context_length': len('\n'.join(content_sections)),
             }
 
+            # Truncate to stay within embedding model context limit (512 tokens ≈ 450 chars worst-case)
+            full_content = '\n'.join(content_sections)
+            if len(full_content) > 450:
+                full_content = full_content[:450]
+
             # Create enhanced chunk
             enhanced_chunk = Document(
-                page_content='\n'.join(content_sections),
+                page_content=full_content,
                 metadata=enhanced_metadata,
             )
             enhanced_chunks.append(enhanced_chunk)

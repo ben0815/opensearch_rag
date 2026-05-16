@@ -85,10 +85,48 @@ ollama pull phi3.5
 
 ## Usage
 
+### Web Interface
+
 1. **Upload Documents**: Use the web interface to upload documents (PDF, TXT, MD, PY)
 2. **Process Documents**: The system will chunk, embed, and store the documents
 3. **Ask Questions**: Query the system about the content of your documents
 4. **View Sources**: See which document chunks were used to generate the answer
+
+### Bulk Ingestion via CLI
+
+To ingest many PDF files without the web interface, use the `ingest` module:
+
+```bash
+# Single file
+python -m app.ingest document.pdf
+
+# Multiple files
+python -m app.ingest doc1.pdf doc2.pdf doc3.pdf
+
+# All PDFs in a directory
+python -m app.ingest /path/to/pdfs/
+
+# All PDFs in a directory and all subdirectories
+python -m app.ingest /path/to/pdfs/ --recursive
+
+# Mix of files and directories
+python -m app.ingest /pdfs/ single.pdf /another/folder/ --recursive
+```
+
+The CLI shows a live progress bar per file and prints a summary at the end:
+
+```
+Found 3 PDF file(s) to ingest.
+
+[1/3] report.pdf    [██████████████████████████████] 100.0%  ✓
+[2/3] handbook.pdf  [██████████████████████████████] 100.0%  ✓
+[3/3] broken.pdf    ✗ Error processing document: ...
+
+────────────────────────────────────────
+Done: 2 succeeded, 1 failed.
+```
+
+Already-indexed files are detected automatically via their file hash and skipped.
 
 ## Development
 

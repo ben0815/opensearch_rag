@@ -27,7 +27,7 @@ class LoaderConfig:
         # Ollama settings
         self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
         self.embeddings_model = os.getenv('EMBEDDINGS_MODEL', 'mxbai-embed-large')
-        self.llm_model = os.getenv('LLM_MODEL', 'phi3.5')
+        self.llm_model = os.getenv('LLM_MODEL', 'qwen3.5:122b')
         self.embedder_type = os.getenv('EMBEDDER_TYPE', 'ollama')
         self.llm_type = os.getenv('LLM_TYPE', 'ollama')
 
@@ -45,7 +45,7 @@ class LoaderConfig:
         self.opensearch_password = os.getenv('OPENSEARCH_PASSWORD', 'admin')
         self.opensearch_index_name = os.getenv('OPENSEARCH_INDEX_NAME', 'documents')
         self.redis_host = os.getenv('REDIS_HOST', 'localhost')
-        self.redis_port = os.getenv('REDIS_PORT', '6379')
+        self.redis_port = int(os.getenv('REDIS_PORT', '6379'))
 
     def validate(self):
         """

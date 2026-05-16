@@ -1,8 +1,9 @@
-version: '3.8'
+#version: '3.8'
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:2.11.1
+    #image: opensearchproject/opensearch:2.11.1
+    image: opensearchproject/opensearch:latest
     container_name: opensearch
     environment:
       - cluster.name=opensearch-cluster
@@ -34,7 +35,8 @@ services:
       start_period: 40s
 
   opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:2.11.1
+    #image: opensearchproject/opensearch-dashboards:2.11.1
+    image: opensearchproject/opensearch-dashboards:latest
     container_name: opensearch-dashboards
     ports:
       - "5601:5601"
@@ -53,43 +55,43 @@ services:
       opensearch:
         condition: service_healthy
 
-  ollama:
-    build:
-      context: .
-      dockerfile: ollama.Dockerfile
-    ports:
-      - "11434:11434"
-    volumes:
-      - ${HOME}/.ollama:/root/.ollama
-    environment:
-      - DOWNLOAD_MODELS=false
-      - MODELS=mxbai-embed-large,phi3.5
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-          cpus: '4'
-        reservations:
-          memory: 4G
-          cpus: '2'
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-    networks:
-      - opensearch-network
-    restart: unless-stopped
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      stack:
-        soft: 67108864
-        hard: 67108864
+#  ollama:
+#    build:
+#      context: .
+#      dockerfile: ollama.Dockerfile
+#    ports:
+#      - "11434:11434"
+#    volumes:
+#      - ${HOME}/.ollama:/root/.ollama
+#    environment:
+#      - DOWNLOAD_MODELS=false
+#      - MODELS=mxbai-embed-large,phi3.5
+#      - NVIDIA_VISIBLE_DEVICES=all
+#      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+#    deploy:
+#      resources:
+#        limits:
+#          memory: 8G
+#          cpus: '4'
+#        reservations:
+#          memory: 4G
+#          cpus: '2'
+#    healthcheck:
+#      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+#      interval: 30s
+#      timeout: 10s
+#      retries: 5
+#      start_period: 120s
+#    networks:
+#      - opensearch-network
+#    restart: unless-stopped
+#    ulimits:
+#      memlock:
+#        soft: -1
+#        hard: -1
+#      stack:
+#        soft: 67108864
+#        hard: 67108864
 
   app:
     build:
@@ -107,7 +109,7 @@ services:
       # Service connections
       - OLLAMA_HOST=http://host.docker.internal:11434
       - EMBEDDINGS_MODEL=mxbai-embed-large
-      - LLM_MODEL=phi3.5
+      - LLM_MODEL=qwen3.5:122b
       - EMBEDDER_TYPE=ollama
       - LLM_TYPE=ollama
       - OPENSEARCH_URL=http://opensearch:9200
@@ -118,6 +120,7 @@ services:
       - REDIS_PORT=6379
       # Processing settings
       - EMBEDDING_PROVIDER=ollama
+      - EMBEDDING_SIZE=1024
       - CHUNK_SIZE=500
       - CHUNK_OVERLAP=100
       # Debug settings
@@ -138,13 +141,15 @@ services:
       opensearch-network:
         aliases:
           - app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       opensearch:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
+#      ollama:
+#        condition: service_healthy
     restart: unless-stopped
 
   redis:
@@ -181,4 +186,4 @@ networks:
 
 secrets:
   app_env:
-    file: .env
+    file: secrets/.env

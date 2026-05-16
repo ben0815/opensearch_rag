@@ -6,7 +6,8 @@ if TYPE_CHECKING:
     from app.loader.config import LoaderConfig
 
 from dotenv import load_dotenv
-from langchain_community.embeddings import BedrockEmbeddings, OllamaEmbeddings
+from langchain_aws import BedrockEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import OpenSearchVectorSearch
 from opensearchpy import OpenSearch, RequestsHttpConnection
 
@@ -22,7 +23,9 @@ class VectorStore:
         self.config = config
         self.embedder_type = config.embedder_type
         self.embeddings = self.get_embeddings()
+        self._index_mapping = self._get_index_mapping()
         self._ensure_index()
+        self._store: OpenSearchVectorSearch | None = None
 
     def get_embeddings(self):
         if self.embedder_type == 'bedrock':
@@ -33,7 +36,7 @@ class VectorStore:
             try:
                 return OllamaEmbeddings(
                     base_url=self.config.ollama_host,
-                    model=self.config.llm_model,
+                    model=self.config.embeddings_model,
                 )
             except Exception as e:
                 raise ValueError(f'Error initializing Ollama embeddings: {e}') from e
@@ -54,8 +57,9 @@ class VectorStore:
                 logger.info(f'Creating index {index_name} with optimized settings')
                 client.indices.create(
                     index=index_name,
-                    body=self._get_index_mapping(),
+                    body=self._index_mapping,
                 )
+            client.close()
         except Exception as e:
             logger.error(f'Error ensuring index: {e}')
             raise
@@ -68,12 +72,9 @@ class VectorStore:
             'settings': {
                 'index': {
                     'knn': True,
-                    'knn.algo_param.ef_search': 512,  # Increased for better recall
-                    'knn.algo_param.ef_construction': 512,  # Better index construction
-                    'knn.algo_param.m': 48,  # Increased neighborhood size
-                    'number_of_shards': 1,  # Single shard for better kNN
+                    'number_of_shards': 1,
                     'number_of_replicas': 1,
-                    'refresh_interval': '1s',  # Faster refresh for testing
+                    'refresh_interval': '1s',
                     'analysis': {
                         'analyzer': {
                             'default': {
@@ -91,7 +92,7 @@ class VectorStore:
                         'dimension': embedding_dimension,
                         'method': {
                             'name': 'hnsw',
-                            'engine': 'nmslib',
+                            'engine': 'lucene',
                             'space_type': 'l2',
                             'parameters': {
                                 'ef_construction': 512,
@@ -128,23 +129,21 @@ class VectorStore:
             },
         }
 
-    def get_store(self):
-        """Get configured vector store with optimized settings."""
-        store = OpenSearchVectorSearch(
-            embedding_function=self.embeddings,
-            opensearch_url=self.config.opensearch_url,
-            index_name=self.config.opensearch_index_name,
-            engine='nmslib',
-            timeout=300,
-            connection_class=RequestsHttpConnection,
-            is_aoss=False,
-            vector_field='vector_field',
-            text_field='text',
-            method='hnsw',
-            space_type='l2',
-            ef_search=512,
-            m=48,
-            index_mapping=self._get_index_mapping(),
-        )
-
-        return store
+    def get_store(self) -> OpenSearchVectorSearch:
+        """Get configured vector store (cached singleton)."""
+        if self._store is None:
+            self._store = OpenSearchVectorSearch(
+                embedding_function=self.embeddings,
+                opensearch_url=self.config.opensearch_url,
+                index_name=self.config.opensearch_index_name,
+                engine='lucene',
+                timeout=300,
+                connection_class=RequestsHttpConnection,
+                is_aoss=False,
+                vector_field='vector_field',
+                text_field='text',
+                method='hnsw',
+                space_type='l2',
+                index_mapping=self._index_mapping,
+            )
+        return self._store

@@ -55,7 +55,7 @@ async def update_documents_list(document_processor: Any):
     try:
         docs = await document_processor.get_indexed_documents()
         logger.info(f'Indexed documents: {docs}')
-        return [f'{doc["title"]}({doc["id"]})' for doc in docs]
+        return [[f'{doc["title"]}({doc["id"]})'] for doc in docs]
     except Exception as e:
         logger.error(f'Error fetching indexed documents: {e}', exc_info=True)
         return []

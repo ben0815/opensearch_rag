@@ -7,9 +7,9 @@ import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from langchain.docstore.document import Document
+    from langchain_core.documents import Document
 
-    from app.vector_store import VectorStore
+    from app.loader.vector_store import VectorStore
 
 import asyncio
 import traceback
@@ -20,7 +20,6 @@ import fitz
 
 from app.loader.chunk_splitter import ChunkSplitter
 from app.loader.config import LoaderConfig
-from app.loader.embeddings import EmbeddingsManager
 from app.metadata.redis_service import DocumentMetadata, RedisMetadataService
 from app.utils.logging_config import setup_logger
 
@@ -43,20 +42,22 @@ class DocumentProcessor:
             vector_store: Optional vector store instance
         """
         self.config = config or LoaderConfig()
-        self.embeddings_manager = EmbeddingsManager(self.config)
         self.vector_store = vector_store
         self.metadata_service = RedisMetadataService(
             host=self.config.redis_host,
-            port=int(self.config.redis_port),
+            port=self.config.redis_port,
         )
 
     async def _calculate_file_hash(self, file_path: Path) -> str:
         """Calculate SHA-256 hash of file."""
-        sha256_hash = hashlib.sha256()
-        with open(file_path, 'rb') as f:
-            for byte_block in iter(lambda: f.read(4096), b''):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
+        def _hash():
+            sha256_hash = hashlib.sha256()
+            with open(file_path, 'rb') as f:
+                for byte_block in iter(lambda: f.read(4096), b''):
+                    sha256_hash.update(byte_block)
+            return sha256_hash.hexdigest()
+
+        return await asyncio.to_thread(_hash)
 
     async def process_chunk(
         self,
@@ -70,9 +71,13 @@ class DocumentProcessor:
             embeddings_manager: Embeddings manager instance
             vector_store: Vector store instance
         """
-        # Add to vector store - it will handle embeddings internally
-        return self.vector_store.get_store().add_texts(
-            texts=[chunk.page_content],
+        # Hard truncation: mxbai-embed-large has 512 token context.
+        # 450 chars ≈ 300 tokens worst-case (German/dense text), safe for all languages.
+        content = chunk.page_content[:450]
+        store = self.vector_store.get_store()
+        return await asyncio.to_thread(
+            store.add_texts,
+            texts=[content],
             metadatas=[chunk.metadata],
         )
 
@@ -124,11 +129,9 @@ class DocumentProcessor:
                 await asyncio.gather(*tasks)
                 tasks = []
 
-            # Calculate and yield progress
             progress = (processed / total_chunks) * 100
-            logger.info(
-                f'Percentage of processed chunks {progress}, ({processed}, {total_chunks}) for page {metadata["page"]}',
-            )
+            if processed % 10 == 0 or processed == total_chunks:
+                logger.info(f'Page {metadata["page"]}: {processed}/{total_chunks} chunks ({progress:.0f}%)')
             yield progress
 
         # Process any remaining tasks
@@ -161,8 +164,6 @@ class DocumentProcessor:
                 if total_pages == 0:
                     raise ValueError('Document contains no pages')
 
-            # Process each page
-            with fitz.open(str(file_path)) as doc:
                 for i, page in enumerate(doc):
                     text = page.get_text()
                     metadata = {
@@ -228,7 +229,7 @@ class DocumentProcessor:
         try:
             metadata = await self.metadata_service.get_document_metadata(doc_id)
             if metadata:
-                return metadata.dict()
+                return metadata.model_dump()
             return None
         except Exception as e:
             logger.error(f'Error fetching document metadata: {e}')

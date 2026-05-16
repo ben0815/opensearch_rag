@@ -24,13 +24,11 @@ def create_chat_interface(
     chatbot = gr.Chatbot(
         label='Chat History',
         height=400,
-        show_copy_button=True,
-        type='messages',
     )
 
     with gr.Accordion('Semantic Search Results', open=False):
         semantic_output = gr.Markdown(
-            show_copy_button=True,
+            #show_copy_button=True,
         )
 
     question_input = gr.Textbox(

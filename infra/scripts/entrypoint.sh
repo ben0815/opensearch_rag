@@ -22,7 +22,7 @@ create_env_file() {
 
     # Otherwise, create from secrets
     echo "Creating .env file from secrets"
-    for secret in /app/secrets/; do
+    for secret in /app/secrets/*; do
         if [ -f "$secret" ]; then
             secret_name=$(basename "$secret")
             echo "$secret_name=$(cat $secret)" >> "$ENV_FILE"

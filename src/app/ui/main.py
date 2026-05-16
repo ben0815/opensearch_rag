@@ -41,7 +41,7 @@ def create_interface(config, processor, document_processor, vector_store):
     # Load CSS from file
     css = load_css()
 
-    with gr.Blocks(title='RAG with OpenSearch and LangChain', css=css) as demo:
+    with gr.Blocks(title='RAG with OpenSearch and LangChain') as demo:
         gr.Markdown(
             """
             <div class="logo-container">
@@ -60,7 +60,7 @@ def create_interface(config, processor, document_processor, vector_store):
             </div>
             """,
         )
-        with gr.Blocks(title='Configuration', css=css):
+        with gr.Blocks(title='Configuration'):
             gr.Markdown(
                 f"""
                 <div class="configuration-container">
@@ -133,4 +133,4 @@ def create_interface(config, processor, document_processor, vector_store):
         )
 
     logger.info('Gradio interface initialized successfully')
-    return demo
+    return demo, css

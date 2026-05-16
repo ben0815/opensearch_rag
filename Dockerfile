@@ -1,5 +1,5 @@
 # Build stage
-FROM python:3.10-slim as builder
+FROM python:3.12-slim AS builder
 
 # Set build arguments
 ARG DEBIAN_FRONTEND=noninteractive
@@ -38,12 +38,14 @@ RUN python -m pip install --upgrade pip && \
 # Copy the rest of the application
 COPY setup.py .
 COPY src/ src/
+#COPY entrypoint.sh .
+COPY infra/scripts/entrypoint.sh ./entrypoint.sh
 
 # Install the application
 RUN pip install --no-cache-dir -e .
 
 # Runtime stage
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 # Set runtime arguments
 ARG DEBIAN_FRONTEND=noninteractive
@@ -54,7 +56,7 @@ WORKDIR /app
 RUN mkdir -p /app/secrets
 
 # Copy installed packages and application files
-COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /build/src /app/src
 COPY --from=builder /build/setup.py /app/setup.py
 
@@ -86,7 +88,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${APP_PORT}/status || exit 1
 
 # Add script to load environment variables
-COPY --chown=appuser:appuser infra/scripts/entrypoint.sh /app/entrypoint.sh
+#COPY --chown=appuser:appuser infra/scripts/entrypoint.sh /app/entrypoint.sh
+COPY --from=builder --chown=appuser:appuser /build/entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 
 # Command to run the application

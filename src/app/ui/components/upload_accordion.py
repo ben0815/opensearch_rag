@@ -8,8 +8,7 @@ import gradio as gr
 from app.ui.actions import handle_file_upload
 from app.utils.logging_config import setup_logger
 
-# Define the images directory relative to the current file
-IMAGES_DIR = Path(__file__).parent.parent / 'images'
+IMAGES_DIR = Path('/tmp/rag_images')
 
 
 def ensure_images_dir() -> None:
@@ -23,12 +22,12 @@ def ensure_images_dir() -> None:
 logger = setup_logger(__name__)
 
 
-async def preview_pdf(files: list[gr.File]) -> list[gr.Image]:
+async def preview_pdf(files: list[str]) -> list[gr.Image]:
     """
     Generate preview images for PDF pages.
 
     Args:
-        files: List of uploaded PDF files
+        files: List of uploaded PDF file paths
 
     Returns:
         List of page images
@@ -43,7 +42,7 @@ async def preview_pdf(files: list[gr.File]) -> list[gr.Image]:
     images = []
     try:
         for file_idx, file in enumerate(files):
-            doc = fitz.open(file.name)
+            doc = fitz.open(file)
             logger.info(
                 f'Generating preview for PDF {file_idx + 1} with {doc.page_count} pages',
             )

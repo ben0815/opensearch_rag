@@ -27,7 +27,7 @@ wheels/
 *.egg-info*
 
 # Virtual environments
-.env
+#.env
 .venv
 env/
 venv/
@@ -64,5 +64,5 @@ LICENSE
 *.db
 *.sqlite3
 .DS_Store
-infra/
+#infra/
 tests/

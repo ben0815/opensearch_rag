@@ -1,47 +1,53 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from langchain.prompts import PromptTemplate
-from langchain.schema.output_parser import StrOutputParser
-from langchain.schema.runnable import RunnablePassthrough
-from langchain_community.llms import Bedrock, Ollama
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_ollama import OllamaLLM
 
 if TYPE_CHECKING:
+    from langchain_aws import BedrockLLM
     from app.loader import LoaderConfig, VectorStore
 
 from app.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
+_llm_cache: dict[str, OllamaLLM | Any] = {}
 
-def get_llm(config: LoaderConfig, llm_type: str = None) -> Bedrock | Ollama:
+
+def get_llm(config: LoaderConfig) -> BedrockLLM | OllamaLLM:
     """
-    Get the LLM based on configuration
-    Args:
-        llm_type: Optional override for LLM type
+    Get the LLM based on configuration (cached per model key).
+
     Returns:
         LLM instance
     """
-    # Use environment variable if not explicitly specified
     llm_type = config.llm_type
+    cache_key = f'{llm_type}:{config.llm_model}'
 
-    if llm_type.lower() == 'bedrock':
-        return Bedrock(
-            credentials_profile_name='default',
-            region_name=config.region_name,
-            endpoint_url=config.endpoint_url,
-            model_id=config.model_id,
-            model_kwargs={'temperature': 0.7, 'max_tokens_to_sample': 4096},
-        )
-    elif llm_type.lower() == 'ollama':
-        return Ollama(
-            base_url=config.ollama_host,
-            model=config.llm_model,
-            temperature=0.7,
-        )
-    else:
-        raise ValueError(f'Unsupported LLM type: {llm_type}')
+    if cache_key not in _llm_cache:
+        if llm_type.lower() == 'bedrock':
+            from langchain_aws import BedrockLLM
+            _llm_cache[cache_key] = BedrockLLM(
+                credentials_profile_name='default',
+                region_name=config.region_name,
+                endpoint_url=config.endpoint_url,
+                model_id=config.model_id,
+                model_kwargs={'temperature': 0.7, 'max_tokens_to_sample': 4096},
+            )
+        elif llm_type.lower() == 'ollama':
+            _llm_cache[cache_key] = OllamaLLM(
+                base_url=config.ollama_host,
+                model=config.llm_model,
+                temperature=0.7,
+            )
+        else:
+            raise ValueError(f'Unsupported LLM type: {llm_type}')
+
+    return _llm_cache[cache_key]
 
 
 def search(question: str, config: LoaderConfig, vector_store: VectorStore):
@@ -57,39 +63,31 @@ def search(question: str, config: LoaderConfig, vector_store: VectorStore):
         Tuple of (semantic_results, rag_result)
     """
     try:
-        llm_type = config.llm_type
         store = vector_store.get_store()
 
         # Clean and prepare the query
         cleaned_question = question.strip()
 
-        # Create multiple retrieval strategies
-        hybrid_retriever = store.as_retriever(
-            search_type='similarity_score_threshold',
-            search_kwargs={
-                'k': 5,  # Increased from 3 to get more context
-                'score_threshold': 0.5,  # Only return relevant results
-                'fetch_k': 20,  # Fetch more candidates for reranking
-            },
+        # Strategy 1: Similarity search with scores
+        scored_results = store.similarity_search_with_relevance_scores(
+            cleaned_question,
+            k=5,
+            score_threshold=0.5,
         )
-
-        # Get semantic search results with multiple strategies
         semantic_results = []
+        for doc, score in scored_results:
+            doc.metadata['score'] = round(score, 4)
+            semantic_results.append(doc)
 
-        # Strategy 1: Direct similarity search
-        direct_results = hybrid_retriever.get_relevant_documents(cleaned_question)
-        semantic_results.extend(direct_results)
-
-        # Strategy 2: MMR search for diversity
-        mmr_retriever = store.as_retriever(
-            search_type='mmr',
-            search_kwargs={
-                'k': 3,
-                'fetch_k': 10,
-                'lambda_mult': 0.7,  # Balance between relevance and diversity
-            },
+        # Strategy 2: MMR search for diversity (no score available)
+        mmr_results = store.max_marginal_relevance_search(
+            cleaned_question,
+            k=3,
+            fetch_k=10,
+            lambda_mult=0.7,
         )
-        mmr_results = mmr_retriever.get_relevant_documents(cleaned_question)
+        for doc in mmr_results:
+            doc.metadata.setdefault('score', 'MMR')
         semantic_results.extend(mmr_results)
 
         # Remove duplicates while preserving order
@@ -100,9 +98,9 @@ def search(question: str, config: LoaderConfig, vector_store: VectorStore):
                 seen.add(doc.page_content)
                 unique_results.append(doc)
 
-        # Sort results by relevance (if score is available)
+        # Sort by score; MMR-only results (no numeric score) go last
         unique_results.sort(
-            key=lambda x: float(x.metadata.get('score', 0)),
+            key=lambda x: float(x.metadata['score']) if isinstance(x.metadata.get('score'), (int, float)) else -1,
             reverse=True,
         )
 
@@ -126,7 +124,7 @@ def search(question: str, config: LoaderConfig, vector_store: VectorStore):
         )
 
         # Get LLM
-        llm = get_llm(config, llm_type)
+        llm = get_llm(config)
 
         # Create the chain using the new style
         retrieval_chain = (
@@ -147,8 +145,8 @@ def search(question: str, config: LoaderConfig, vector_store: VectorStore):
             'total_results_found': len(semantic_results),
             'unique_results_used': len(unique_results),
             'search_strategies_used': ['similarity', 'mmr'],
-            'top_result_score': float(unique_results[0].metadata.get('score', 0))
-            if unique_results
+            'top_result_score': float(unique_results[0].metadata['score'])
+            if unique_results and isinstance(unique_results[0].metadata.get('score'), (int, float))
             else 0,
         }
 

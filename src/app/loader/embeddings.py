@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from langchain.docstore.document import Document
+    from langchain_core.documents import Document
 
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 
 from app.loader.config import LoaderConfig
 
@@ -36,7 +36,7 @@ class EmbeddingsManager:
         Args:
             documents: List of documents to embed
         """
-        return self.embeddings.aembed_documents(documents)
+        return await self.embeddings.aembed_documents(documents)
 
     async def aembed_query(self, query: str) -> list[float]:
         """

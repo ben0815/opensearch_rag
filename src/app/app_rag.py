@@ -26,7 +26,7 @@ def main(host: str | None = None, port: int | None = None) -> None:
     vector_store = VectorStore(config)
     processor = QueryProcessor(rag, config, vector_store)
     document_processor = DocumentProcessor(config, vector_store)
-    demo = create_interface(config, processor, document_processor, vector_store)
+    demo, css = create_interface(config, processor, document_processor, vector_store)
 
     logger.info('Starting Gradio server...')
     try:
@@ -37,6 +37,7 @@ def main(host: str | None = None, port: int | None = None) -> None:
             server_port=app_port,
             share=False,
             show_error=True,
+            css=css,
         )
     except Exception as e:
         logger.error(f'Error starting Gradio server: {e}')

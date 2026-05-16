@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
@@ -60,11 +62,13 @@ class QueryProcessor:
             str: Formatted semantic results table
         """
         semantic_table = ''
-        processed_results = []
+        processed_results = set()
         for result in semantic_results:
             if result.page_content not in processed_results:
-                processed_results.append(result.page_content)
-                semantic_table += f"- Score: {result.metadata.get('score', 'N/A')} <br>  Page: {result.metadata.get('page', 'N/A')} <br>  Text: {result.page_content} <br> <br>"
+                processed_results.add(result.page_content)
+                source = result.metadata.get('source', '')
+                document = Path(source).name if source else 'N/A'
+                semantic_table += f"- Score: {result.metadata.get('score', 'N/A')} <br>  Document: {document} <br>  Page: {result.metadata.get('page', 'N/A')} <br>  Text: {result.page_content} <br> <br>"
         return semantic_table
 
     def _process_rag_result(self, rag_result):
