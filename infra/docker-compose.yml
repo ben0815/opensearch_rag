@@ -2,7 +2,7 @@
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:2.19.1
+    image: opensearchproject/opensearch:3.6.0
     container_name: opensearch
     environment:
       - cluster.name=opensearch-cluster
@@ -34,26 +34,6 @@ services:
       start_period: 40s
     restart: unless-stopped
 
-  opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:2.19.1
-    container_name: opensearch-dashboards
-    ports:
-      - "5601:5601"
-    environment:
-      - 'OPENSEARCH_HOSTS=["http://opensearch:9200"]'
-      - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true"
-    networks:
-      - opensearch-network
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:5601/status | grep -q '\"status\":\"green\"'"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-    depends_on:
-      opensearch:
-        condition: service_healthy
-    restart: unless-stopped
 
 #  ollama:
 #    build:
@@ -121,8 +101,16 @@ services:
       # Processing settings
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
       - EMBEDDING_SIZE=${EMBEDDING_SIZE:-1024}
-      - CHUNK_SIZE=${CHUNK_SIZE:-500}
-      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}
+      - CHUNK_SIZE=${CHUNK_SIZE:-400}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-40}
+      - EMBEDDING_MAX_TOKENS=${EMBEDDING_MAX_TOKENS:-480}
+      - TOKENIZER_MODEL_ID=${TOKENIZER_MODEL_ID:-mixedbread-ai/mxbai-embed-large-v1}
+      - OPENSEARCH_ANALYZER=${OPENSEARCH_ANALYZER:-german}
+      # Hybrid search settings
+      - HYBRID_SEARCH_PIPELINE_NAME=${HYBRID_SEARCH_PIPELINE_NAME:-hybrid-rag-pipeline}
+      - HYBRID_BM25_WEIGHT=${HYBRID_BM25_WEIGHT:-0.3}
+      - HYBRID_KNN_WEIGHT=${HYBRID_KNN_WEIGHT:-0.7}
+      - HYBRID_K=${HYBRID_K:-10}
       # Debug settings
       - PYTHONUNBUFFERED=1
     volumes:

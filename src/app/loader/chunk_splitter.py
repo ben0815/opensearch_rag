@@ -1,36 +1,65 @@
 import re
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
-#from langchain.docstore.document import Document
 from langchain_core.documents import Document
-#from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
+_DEFAULT_TOKENIZER_MODEL = 'mixedbread-ai/mxbai-embed-large-v1'
+
+
+@lru_cache(maxsize=4)
+def _load_tokenizer(model_id: str):
+    """Load and cache a HuggingFace tokenizer (one instance per model ID)."""
+    from transformers import AutoTokenizer
+    logger.info(f'Loading HuggingFace tokenizer: {model_id}')
+    return AutoTokenizer.from_pretrained(model_id)
+
+
+def _truncate_to_tokens(text: str, max_tokens: int, tokenizer) -> str:
+    """Truncate text so that its token count does not exceed max_tokens.
+
+    Decodes the sliced token IDs back to text so that word boundaries are
+    respected rather than cutting in the middle of a word.
+    """
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    if len(ids) <= max_tokens:
+        return text
+    return tokenizer.decode(ids[:max_tokens], skip_special_tokens=True, clean_up_tokenization_spaces=True)
+
 
 class ChunkSplitter:
     """Strategy for splitting a document into processable parts with enhanced context."""
 
-    def __init__(self, chunk_size: int, chunk_overlap: int):
+    def __init__(
+        self,
+        chunk_size: int,
+        chunk_overlap: int,
+        embedding_max_tokens: int = 480,
+        tokenizer_model_id: str = _DEFAULT_TOKENIZER_MODEL,
+    ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.embedding_max_tokens = embedding_max_tokens
+        self.tokenizer = _load_tokenizer(tokenizer_model_id)
         self.text_splitter = self.get_splitter()
 
     def get_splitter(self) -> RecursiveCharacterTextSplitter:
         """
-        Get configured text splitter with optimized separators.
+        Get text splitter using the tokenizer's token count as the length function.
 
-        Returns:
-            Configured RecursiveCharacterTextSplitter instance
+        chunk_size and chunk_overlap are now measured in tokens, not characters.
         """
+        tokenizer = self.tokenizer
         return RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
-            length_function=len,
+            length_function=lambda text: len(tokenizer.encode(text, add_special_tokens=False)),
             separators=[
                 '\n\n',  # Paragraphs
                 '\n',  # Lines
@@ -162,10 +191,8 @@ class ChunkSplitter:
                 'context_length': len('\n'.join(content_sections)),
             }
 
-            # Truncate to stay within embedding model context limit (512 tokens ≈ 450 chars worst-case)
             full_content = '\n'.join(content_sections)
-            if len(full_content) > 450:
-                full_content = full_content[:450]
+            full_content = _truncate_to_tokens(full_content, self.embedding_max_tokens, self.tokenizer)
 
             # Create enhanced chunk
             enhanced_chunk = Document(
@@ -188,7 +215,8 @@ class ChunkSplitter:
         Args:
             text: Text to extract context from
             is_previous: Whether this is previous context
-            max_length: Maximum length of context to extract
+            max_length: Maximum length of context to extract (chars — a pre-filter
+                before the final token-based truncation in add_neighbouring_content)
 
         Returns:
             Extracted context string

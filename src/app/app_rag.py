@@ -27,6 +27,7 @@ def main(host: str | None = None, port: int | None = None) -> None:
         port: Optional port number
     """
     config = LoaderConfig()
+    config.validate()
     vector_store = VectorStore(config)
     processor = QueryProcessor(rag, config, vector_store)
     document_processor = DocumentProcessor(config, vector_store)

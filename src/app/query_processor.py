@@ -20,36 +20,47 @@ class QueryProcessor:
 
     def process_query(self, question):
         """
-        Process the user query and return formatted results.
+        Streaming generator for a user query.
 
-        Args:
-            question (str): The user's question
-
-        Returns:
-            tuple: (answer, semantic_table) where answer is the processed RAG result
-                  and semantic_table is the formatted semantic search results
+        Yields:
+            Tuples of (chat_history, semantic_table).
+            - First yield: semantic results are shown immediately after retrieval;
+              no assistant message yet.
+            - Subsequent yields: assistant message grows token by token.
         """
-        semantic_results, rag_result = self.rag.search(
-            question=question,
-            config=self.config,
-            vector_store=self.vector_store,
-        )
+        try:
+            docs, _ = self.rag.retrieve(
+                question=question,
+                config=self.config,
+                vector_store=self.vector_store,
+            )
+        except Exception as e:
+            logger.error(f'Error in retrieve: {e}')
+            yield [
+                {'role': 'user', 'content': question},
+                {'role': 'assistant', 'content': f'Fehler bei der Suche: {e}'},
+            ], ''
+            return
 
-        semantic_table = self._format_semantic_results(semantic_results)
-        answer = self._process_rag_result(rag_result)
+        semantic_table = self._format_semantic_results(docs)
+        history = [{'role': 'user', 'content': question}]
 
-        history = [
-            {
-                'role': 'user',
-                'content': question,
-            },
-            {
-                'role': 'assistant',
-                'content': answer,
-            },
-        ]
+        # Show semantic results immediately while the LLM starts generating
+        yield history, semantic_table
 
-        return history, semantic_table
+        accumulated = ''
+        try:
+            for token in self.rag.generate_stream(question, docs, self.config):
+                accumulated += token
+                yield history + [{'role': 'assistant', 'content': accumulated}], semantic_table
+        except Exception as e:
+            logger.error(f'Error during streaming: {e}')
+            accumulated += f'\n\n[Fehler: {e}]'
+
+        if not accumulated:
+            accumulated = 'Keine Antwort vom Modell erhalten.'
+
+        yield history + [{'role': 'assistant', 'content': accumulated}], semantic_table
 
     def _format_semantic_results(self, semantic_results):
         """
@@ -68,34 +79,10 @@ class QueryProcessor:
                 processed_results.add(result.page_content)
                 source = result.metadata.get('source', '')
                 document = Path(source).name if source else 'N/A'
-                semantic_table += f"- Score: {result.metadata.get('score', 'N/A')} <br>  Document: {document} <br>  Page: {result.metadata.get('page', 'N/A')} <br>  Text: {result.page_content} <br> <br>"
+                semantic_table += (
+                    f"- Score: {result.metadata.get('score', 'N/A')} <br>"
+                    f"  Document: {document} <br>"
+                    f"  Page: {result.metadata.get('page', 'N/A')} <br>"
+                    f"  Text: {result.page_content} <br> <br>"
+                )
         return semantic_table
-
-    def _process_rag_result(self, rag_result):
-        """
-        Process RAG result into a consistent format.
-
-        Args:
-            rag_result: The RAG system's response (can be dict, str, or other)
-
-        Returns:
-            str: Processed answer
-        """
-        # Log the response format for debugging
-        logger.info(f'Model response type: {type(rag_result)}')
-
-        if isinstance(rag_result, dict):
-            # Standard LangChain output format (e.g., from Claude)
-            answer = rag_result.get(
-                'result',
-                rag_result.get('response', str(rag_result)),
-            )
-        elif isinstance(rag_result, str):
-            # Direct string output (e.g., from phi3.5)
-            answer = rag_result
-        else:
-            # Fallback for unexpected formats
-            answer = str(rag_result)
-
-        logger.info(f'Processed answer: {answer[:100]}...')  # Print first 100 chars
-        return answer

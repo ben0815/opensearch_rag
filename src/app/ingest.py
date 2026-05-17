@@ -78,6 +78,7 @@ async def main(args: argparse.Namespace) -> int:
     print(f'Found {len(files)} PDF file(s) to ingest.\n')
 
     config = LoaderConfig()
+    config.validate()
     vector_store = VectorStore(config)
     processor = DocumentProcessor(config, vector_store)
 

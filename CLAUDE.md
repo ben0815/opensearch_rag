@@ -15,7 +15,6 @@ docker compose up -d
 
 - App-UI: http://localhost:8081
 - OpenSearch: http://localhost:9200
-- OpenSearch Dashboards: http://localhost:5601
 - Ollama läuft **lokal auf dem Host** (nicht im Container), erreichbar über `host.docker.internal:11434`
 
 ## Konfigurationsfluss — Single Source of Truth
@@ -90,20 +89,38 @@ opensearch_rag/
 ### Ingestion-Pipeline
 ```
 PDF → fitz (PyMuPDF) → Seiten-Text
-    → ChunkSplitter.split_into_chunks()       # RecursiveCharacterTextSplitter
-    → ChunkSplitter.add_neighbouring_content() # Fügt Vor-/Nach-Kontext an
-    → content[:450]                            # Hard-Truncation: mxbai-embed-large hat 512 Token Limit
-    → asyncio.to_thread(store.add_texts())    # Synchrones OpenSearch in Thread auslagern
+    → DocumentProcessor._chunk_splitter.split_into_chunks()       # Token-basierter RecursiveCharacterTextSplitter
+    → DocumentProcessor._chunk_splitter.add_neighbouring_content() # Vor-/Nach-Kontext anhängen
+    → _truncate_to_tokens(content, 480)                            # Harte Token-Grenze via HF Tokenizer
+    → DocumentProcessor._embed_chunks()                            # Batched asyncio.to_thread(store.add_texts())
     → RedisMetadataService.save_document_metadata()
 ```
 
+**Token-basiertes Chunking:** `CHUNK_SIZE` und `CHUNK_OVERLAP` sind in **Tokens** (nicht Zeichen). Der HuggingFace-Tokenizer (`TOKENIZER_MODEL_ID`) wird einmalig in `DocumentProcessor.__init__` geladen (`@lru_cache` Singleton). Beim ersten App-Start wird er von HuggingFace Hub heruntergeladen (~1 MB) und danach gecacht.
+
+**`ChunkSplitter` ist ein Singleton pro `DocumentProcessor`** — wird einmalig in `__init__` erzeugt, nicht pro Seite.
+
 **Duplikat-Erkennung:** SHA-256-Hash der Datei wird vor der Verarbeitung gegen Redis geprüft. Bereits indizierte Dateien werden übersprungen (`yield 100.0; return`).
 
-### Retrieval — zwei Strategien in `rag.search()`
-1. `similarity_search_with_relevance_scores(k=5, score_threshold=0.5)` → echte Scores in `doc.metadata['score']`
-2. `max_marginal_relevance_search(k=3, fetch_k=10, lambda_mult=0.7)` → Score wird als `'MMR'`-String gesetzt
+### Retrieval — Hybrid Search in `rag.search()`
 
-Ergebnisse werden dedupliziert (nach `page_content`) und nach numerischem Score sortiert (MMR-only ans Ende).
+`vector_store.hybrid_search(query, k=HYBRID_K)` ruft OpenSearch mit einer `hybrid`-Query auf, die BM25 und kNN kombiniert:
+
+```
+query
+  → OllamaEmbeddings.embed_query()          # Vektor für kNN
+  → OpenSearch hybrid query:
+      match(text, query)                    # BM25 — Lexik, Eigennamen, Akronyme
+      knn(vector_field, vector, k)          # Semantische Ähnlichkeit
+  → normalization-processor pipeline:
+      min_max-Normalisierung beider Scores
+      arithmetic_mean(weights=[0.3, 0.7])   # Konfigurierbar via HYBRID_BM25_WEIGHT/HYBRID_KNN_WEIGHT
+  → Ergebnisse nach combiniertem Score sortiert
+```
+
+**Pipeline-Setup:** `VectorStore.__init__()` legt die Search-Pipeline per `PUT /_search/pipeline/{name}` an (idempotent — wird bei jedem Start aktualisiert). Pipeline-Name und Gewichte sind via ENV konfigurierbar.
+
+Ergebnisse werden nach `page_content` dedupliziert; die Pipeline-Sortierung wird beibehalten (kein eigenes Re-Ranking mehr nötig).
 
 ### Asynchronität
 Die App läuft in Gradios Event-Loop. Alle blockierenden I/O-Operationen müssen mit `asyncio.to_thread()` umhüllt werden — insbesondere `store.add_texts()` und SHA-256-Hashing großer Dateien. Redis-Operationen sind nativ async (`redis.asyncio`).
@@ -159,7 +176,8 @@ docker compose -f infra/docker-compose.yml logs -f opensearch
 - **`DocumentProcessor` benötigt immer `vector_store`** — wirft `ValueError` im `__init__` ohne es
 - **`load_documents()` ist ein async generator** — muss mit `async for` konsumiert werden, nicht mit `await`
 - **`load_dotenv(..., override=False)`** — docker-compose-Env hat Vorrang vor der .env-Datei
-- **Chunk-Inhalt wird auf 450 Zeichen gekürzt** (in `process_chunk` und `add_neighbouring_content`) — nicht erhöhen ohne Modellwechsel
+- **`CHUNK_SIZE`/`CHUNK_OVERLAP` sind in Tokens** — Änderung erfordert Index-Neuaufbau (Chunks wurden anders geschnitten)
+- **`TOKENIZER_MODEL_ID` muss zum `EMBEDDINGS_MODEL` passen** — mxbai-embed-large → `mixedbread-ai/mxbai-embed-large-v1`
 
 ## Was nicht in CLAUDE.md gehört
 

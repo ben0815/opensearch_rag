@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import gradio as gr
@@ -7,36 +8,43 @@ from app.utils.logging_config import setup_logger
 logger = setup_logger(__name__)
 
 
-async def handle_file_upload(files: list[str], document_processor: Any) -> str:
+async def handle_file_upload(files: list[str], document_processor: Any):
     """
     Handle file upload and processing.
+
+    Async generator — yields live status messages so the UI can display progress
+    without waiting for the full processing to complete.
 
     Args:
         files: List of file paths
         document_processor: Document processor instance
 
-    Returns:
-        Status message
+    Yields:
+        Status strings shown in the upload status textbox
     """
     if not files:
         logger.warning('No files provided for upload')
-        return 'No files selected'
+        yield 'Keine Dateien ausgewählt.'
+        return
 
+    total = len(files)
     try:
-        logger.info(f'Processing {len(files)} files')
-        for file in files:
-            logger.debug(f'Processing file: {file}')
-            # Consume the async generator
-            progress = 0
-            async for current_progress in document_processor.load_documents(file):
-                progress = current_progress
-                logger.debug(f'Processing progress: {progress:.2f}%')
+        for i, file in enumerate(files, 1):
+            name = Path(file).name
+            logger.info(f'Processing file {i}/{total}: {name}')
+            yield f'[{i}/{total}] Verarbeite: {name} …'
 
-        logger.info('File processing completed successfully')
-        return 'Files processed successfully'
+            last_milestone = -1
+            async for progress in document_processor.load_documents(file):
+                milestone = int(progress) // 10 * 10
+                if milestone > last_milestone or progress >= 100:
+                    last_milestone = milestone
+                    yield f'[{i}/{total}] {name}: {progress:.0f}%'
+
+        yield f'Fertig — {total} Datei(en) verarbeitet.'
     except Exception as e:
-        logger.error(f'Error processing files: {e}', exc_info=True)
-        return f'Error processing files: {str(e)}'
+        logger.error(f'Fehler beim Verarbeiten: {e}', exc_info=True)
+        yield f'Fehler: {str(e)}'
 
 
 def clear_chat() -> tuple[list, str, str]:
