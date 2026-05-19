@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,14 +30,17 @@ class DocumentProcessor:
         self,
         config: LoaderConfig | None = None,
         vector_store: VectorStore | None = None,
+        instance_slug: str = "default",
+        redis_service: RedisMetadataService | None = None,
     ) -> None:
         self.config = config or LoaderConfig()
         if vector_store is None:
             raise ValueError('vector_store is required for DocumentProcessor')
         self.vector_store = vector_store
-        self.metadata_service = RedisMetadataService(
-            host=self.config.redis_host,
-            port=self.config.redis_port,
+        self._instance_slug = instance_slug
+        # Injizierte redis_service nutzen (App-Singleton), sonst Fallback für CLI-Nutzung
+        self.metadata_service = redis_service or RedisMetadataService.from_config(
+            self.config, instance_slug
         )
         self._tokenizer = _load_tokenizer(self.config.tokenizer_model_id)
         self._chunk_splitter = ChunkSplitter(
@@ -95,34 +98,35 @@ class DocumentProcessor:
                     raise
 
     async def _embed_chunks(self, chunks: list[Document], page_metadata: dict):
-        """Embed and store pre-split chunks. Yields progress percentage (0–100)."""
+        """Embed and store pre-split chunks. Yields progress percentage (0–100).
+
+        Uses a Semaphore to cap concurrent Ollama calls at 3.  Progress is
+        reported after each chunk actually completes, not when its task is
+        created (which would be immediate and misleading).
+        """
         total = len(chunks)
         if total == 0:
             return
 
-        tasks: list = []
-        processed = 0
-        batch_size = 3
+        sem = asyncio.Semaphore(3)
 
-        for chunk in chunks:
-            tasks.append(asyncio.create_task(self.process_chunk(chunk)))
-            processed += 1
+        async def _bounded(chunk: Document) -> None:
+            async with sem:
+                await self.process_chunk(chunk)
 
-            if len(tasks) >= batch_size:
-                await asyncio.gather(*tasks)
-                tasks = []
-
-            progress = (processed / total) * 100
-            if processed % 10 == 0 or processed == total:
+        tasks = [asyncio.create_task(_bounded(chunk)) for chunk in chunks]
+        completed = 0
+        for coro in asyncio.as_completed(tasks):
+            await coro
+            completed += 1
+            progress = (completed / total) * 100
+            if completed % 10 == 0 or completed == total:
                 logger.info(
-                    f'Page {page_metadata["page"]}: {processed}/{total} chunks ({progress:.0f}%)'
+                    f'Page {page_metadata["page"]}: {completed}/{total} chunks ({progress:.0f}%)'
                 )
             yield progress
 
-        if tasks:
-            await asyncio.gather(*tasks)
-
-    async def load_documents(self, file_path: Path | str):
+    async def load_documents(self, file_path: Path | str, original_filename: str | None = None):
         """
         Load a document and store it in the vector database.
 
@@ -149,6 +153,7 @@ class DocumentProcessor:
                 for i, page in enumerate(doc):
                     metadata = {
                         'source': str(file_path),
+                        'filename': original_filename or file_path.name,
                         'page': i + 1,
                         'total_pages': total_pages,
                     }
@@ -169,12 +174,12 @@ class DocumentProcessor:
             await self.metadata_service.save_document_metadata(
                 file_hash,
                 DocumentMetadata(
-                    title=file_path.name,
+                    title=original_filename or file_path.name,
                     file_size=file_size,
                     page_count=total_pages,
                     chunk_count=chunk_count,
                     source_path=str(file_path),
-                    indexed_date=datetime.now().isoformat(),
+                    indexed_date=datetime.now(timezone.utc).isoformat(),
                     file_hash=file_hash,
                     additional_metadata={'processor_version': '1.0'},
                 ),

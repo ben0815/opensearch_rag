@@ -1,173 +1,94 @@
-# Application Code
+# app/
 
-This directory contains the main application code for the LangChain OpenSearch RAG system.
+FastAPI-Anwendung. Einstiegspunkt: `app_fastapi.py`.
 
-## Overview
+## Module
 
-The application is built around several key components:
-- Document loading and processing
-- Embedding generation
-- Vector storage and retrieval
-- LLM-based question answering
-- Web interface for user interaction
+### `app_fastapi.py`
+FastAPI-App mit `lifespan`-Kontext: initialisiert `LoaderConfig` und Redis-Verbindung, startet den Session-Cleanup-Task (stündlich), registriert Middleware und Router.
 
-## Components
+### `ingest.py`
+CLI-Tool für Bulk-Ingestion:
+```bash
+python -m app.ingest --instance <slug> /pfad/zu/pdfs/ [--recursive]
+```
+Zeigt Live-Fortschrittsbalken pro Datei. Bereits indizierte Dateien werden via SHA-256-Hash übersprungen.
 
-### Main Application (`main.py`)
+### `rag.py`
+Retrieval + Generation:
+- `retrieve()` — Hybrid-Search (BM25 + kNN), Deduplizierung, Score-Filter (`HYBRID_SCORE_THRESHOLD`)
+- `generate_stream()` — LangChain-Chain mit `OllamaLLM`; nimmt optionale `history`-Liste entgegen (letzte 3 Chat-Einträge als Gesprächskontext)
+- `get_llm()` — gecachter LLM-Singleton pro Modell-Key (`num_ctx`, `temperature`, `timeout` konfigurierbar)
+- Prompt: `/no_think`-Direktive (unterdrückt Qwen3-Denkblöcke), Deutschgebot, Kontext-strenge Antwortpflicht
 
-The entry point for the application that:
-- Initializes configuration
-- Sets up logging
-- Launches the Gradio web interface
-- Handles application lifecycle
+### `dependencies.py`
+FastAPI-Dependencies: `get_config()`, `get_redis()`, `limiter` (slowapi, Rate Limiting).
 
-### Document Loader (`loader/`)
+---
 
-The document loader module handles:
+## auth/
 
-#### Configuration (`loader/config.py`)
+| Datei | Inhalt |
+|---|---|
+| `ldap_service.py` | Synchroner LDAP-Bind, prüft `pwdAccountLockedTime` und `shadowExpire`, optionaler Admin-Gruppen-Check. Immer via `asyncio.to_thread()` aufrufen. |
+| `middleware.py` | `AuthMiddleware`: Session-Token aus Cookie prüfen; nicht authentifizierte Requests → Redirect `/login`. |
+| `session.py` | `create_session()`, `get_user_by_token()`, `delete_session()`, `purge_expired_sessions()`. Sessions in PostgreSQL, Lifetime konfigurierbar via `SESSION_LIFETIME_HOURS`. |
 
-Manages application configuration through environment variables:
-- Embedding provider settings (Ollama or OpenAI)
-- Document processing parameters
-- Database connection details
-- Model selection
+## cli/
 
-#### Document Processing (`loader/document_loader.py`)
+`admin.py` — Bootstrap-Admin anlegen:
+```bash
+python -m app.cli.admin create-admin <username> <passwort>
+```
+Legt einen Benutzer mit lokalem bcrypt-Hash an (kein LDAP erforderlich).
 
-Handles:
-- Loading documents from various formats
-- Text extraction
-- Document chunking
-- Metadata extraction
+## db/
 
-#### Embedding Generation (`loader/embeddings.py`)
+| Datei | Inhalt |
+|---|---|
+| `models.py` | SQLAlchemy-Modelle: `User`, `Instance`, `InstanceMember`, `Group`, `GroupMember`, `GroupInstanceRole`, `ChatHistory`, `Session` |
+| `session.py` | `AsyncEngine` (pool_size=10), `get_session_factory()`, `get_db()` FastAPI-Dependency |
 
-Responsible for:
-- Generating embeddings using Ollama or OpenAI
-- Caching embeddings for performance
-- Handling embedding errors and retries
+## loader/
 
-#### Vector Store (`loader/vector_store.py`)
+| Datei | Inhalt |
+|---|---|
+| `config.py` | `LoaderConfig` — liest alle Env-Vars via `os.getenv()` |
+| `vector_store.py` | `VectorStore`: OpenSearch-Index + Hybrid-Search-Pipeline; `for_instance()`-Cache (Double-Checked Lock) |
+| `document_processor.py` | `DocumentProcessor`: PDF → Chunks → OpenSearch + Redis; `asyncio.Semaphore(3)` für max. 3 parallele Embedding-Calls |
+| `chunk_splitter.py` | `ChunkSplitter`: Token-basierter `RecursiveCharacterTextSplitter`, Nachbarkontext, `_truncate_to_tokens()` |
+| `exceptions.py` | `LoaderError` |
 
-Manages:
-- OpenSearch connection and index creation
-- Document storage and retrieval
-- Vector search operations
+**Ingestion-Pipeline:**
+```
+PDF → fitz → Text → split_into_chunks → add_neighbouring_content
+    → _embed_chunks (Semaphore 3) → process_chunk → asyncio.to_thread(store.add_texts)
+    → RedisMetadataService.save_document_metadata
+```
 
-### UI Components (`ui/`)
+## metadata/
 
-The UI module provides:
+`redis_service.py` — `RedisMetadataService`: speichert `DocumentMetadata` (Pydantic) als JSON in Redis.
+Key-Schema: `doc:{instance_slug}:{sha256}`. Listing via SCAN (kein KEYS).
 
-#### Gradio App (`ui/gradio_app.py`)
+## routes/
 
-Implements:
-- Web interface layout
-- File upload functionality
-- Chat interface
-- Result display
+| Datei | Routen |
+|---|---|
+| `auth.py` | `GET/POST /login`, `GET /logout` — Rate Limit: 10 Logins/Minute |
+| `chat.py` | `GET /chat`, `POST /chat/stream` (SSE), `GET /chat/history`, `POST /chat/save-history`, `POST /chat/history/clear`, `POST /chat/history/{id}/delete` |
+| `documents.py` | `GET /documents`, `POST /documents/upload` (SSE), `POST /documents/delete/{hash}` |
+| `admin.py` | `/admin/instances`, `/admin/groups`, `/admin/users` + alle CRUD-Unterrouten |
 
-#### Components (`ui/components.py`)
+## services/
 
-Contains:
-- Reusable UI components
-- Styling and layout definitions
-- Input validation
+| Datei | Inhalt |
+|---|---|
+| `chat_service.py` | `stream_answer(question, slug, config, history)` — synchroner SSE-Generator (läuft via `iterate_in_threadpool`); übergibt letzte 3 Chat-Einträge als Gesprächskontext; `save_to_history()` |
+| `document_service.py` | `get_document_processor()`, `list_documents()`, `delete_document()` |
+| `instance_service.py` | `create_instance()`, `delete_instance()` (OpenSearch-Index + VectorStore-Cache) |
+| `user_service.py` | `get_user_instances()`, `get_effective_role()` — berücksichtigt direkte + Gruppen-Zuweisungen |
 
-#### Callbacks (`ui/callbacks.py`)
+## utils/
 
-Handles:
-- User interaction events
-- Document processing workflows
-- Query processing
-- Error handling and user feedback
-
-## Data Flow
-
-### Document Processing
-
-1. User uploads document through the UI
-2. Document is loaded and text is extracted
-3. Text is split into chunks with overlap
-4. Embeddings are generated for each chunk
-5. Chunks and embeddings are stored in OpenSearch
-6. Confirmation is displayed to the user
-
-### Query Processing
-
-1. User enters a question in the chat interface
-2. Question is embedded using the same model as documents
-3. OpenSearch is queried for relevant document chunks
-4. Retrieved chunks are assembled into context
-5. Question and context are sent to the LLM
-6. LLM generates an answer
-7. Answer and source references are displayed to the user
-
-## Configuration Options
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| OLLAMA_HOST | URL for Ollama API | http://host.docker.internal:11434 |
-| EMBEDDINGS_MODEL | Model for generating embeddings | mxbai-embed-large |
-| LLM_MODEL | Model for text generation | phi3.5 |
-| EMBEDDER_TYPE | Type of embedder to use | ollama |
-| LLM_TYPE | Type of LLM to use | ollama |
-| CHUNK_SIZE | Size of document chunks | 1000 |
-| CHUNK_OVERLAP | Overlap between chunks | 200 |
-| OPENSEARCH_URL | URL for OpenSearch | http://localhost:9200 |
-| OPENSEARCH_INDEX_NAME | Index name for documents | documents |
-| REDIS_HOST | Hostname for Redis | localhost |
-| REDIS_PORT | Port for Redis | 6379 |
-
-## Error Handling
-
-The application implements comprehensive error handling:
-
-- **Document Loading Errors**: Reported to the user with specific error messages
-- **Embedding Generation Errors**: Retried with exponential backoff
-- **OpenSearch Connection Issues**: Handled with connection pooling and retries
-- **LLM Generation Errors**: Fallback responses provided
-- **UI Errors**: Displayed to the user with helpful messages
-
-## Performance Considerations
-
-The application includes several performance optimizations:
-
-- **Redis Caching**: Frequently used embeddings and queries are cached
-- **Batch Processing**: Documents are processed in batches for efficiency
-- **Connection Pooling**: Database connections are reused
-- **Asynchronous Operations**: Non-blocking operations for UI responsiveness
-
-## Security Considerations
-
-Important security aspects:
-
-- **Input Validation**: All user inputs are validated
-- **Error Handling**: Errors are logged without exposing sensitive information
-- **Authentication**: Optional authentication can be enabled
-- **Environment Variables**: Sensitive information is stored in environment variables
-
-## Extending the Application
-
-### Adding New Document Types
-
-To add support for new document types:
-1. Implement a new loader in `loader/document_loader.py`
-2. Register the loader in the document processing pipeline
-3. Update the supported extensions list in `loader/config.py`
-
-### Using Different Models
-
-To use different models:
-1. Ensure the models are available in Ollama
-2. Update the environment variables for model names
-3. Adjust embedding dimensions if necessary
-
-### Adding New Features
-
-The modular architecture makes it easy to add new features:
-1. Implement new functionality in the appropriate module
-2. Update the UI to expose the new features
-3. Add any necessary configuration options
+`logging_config.py` — `setup_logger()`: strukturiertes Logging mit Modul-Namen.

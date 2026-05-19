@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Gruppen{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-3">
+  <h5 class="mb-0">Gruppen</h5>
+  <div class="ms-auto d-flex gap-2">
+    <a href="/admin/instances" class="btn btn-outline-secondary btn-sm">Instanzen</a>
+    <a href="/admin/users" class="btn btn-outline-secondary btn-sm">Benutzer</a>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Neue Gruppe anlegen</div>
+  <div class="card-body">
+    <form method="post" action="/admin/groups/create" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label small">Name</label>
+        <input type="text" name="name" class="form-control form-control-sm" required>
+      </div>
+      <div class="col-auto">
+        <label class="form-label small">LDAP-Gruppen-DN (optional)</label>
+        <input type="text" name="ldap_group_dn" class="form-control form-control-sm" style="min-width:20rem">
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary btn-sm">Anlegen</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% for group in groups %}
+<div class="card mb-3">
+  <div class="card-header d-flex align-items-center gap-2">
+    <strong>{{ group.name }}</strong>
+    {% if group.ldap_group_dn %}
+    <span class="text-muted small">{{ group.ldap_group_dn }}</span>
+    {% endif %}
+    <form method="post" action="/admin/groups/{{ group.id }}/delete" class="ms-auto"
+      data-confirm="Gruppe löschen?">
+      <button type="submit" class="btn btn-outline-danger btn-sm">Löschen</button>
+    </form>
+  </div>
+  <div class="card-body row g-3">
+
+    <div class="col-md-6">
+      <h6 class="small fw-bold text-uppercase text-muted">Instanz-Zuweisungen</h6>
+      {% set gir_list = gir_by_group.get(group.id, []) %}
+      {% if gir_list %}
+      <ul class="list-group list-group-flush mb-2">
+        {% for entry in gir_list %}
+        <li class="list-group-item py-1 d-flex justify-content-between align-items-center">
+          <span>{{ entry.instance.name }} — <em>{{ entry.role }}</em></span>
+          <form method="post" action="/admin/groups/{{ group.id }}/remove-instance/{{ entry.instance.id }}">
+            <button type="submit" class="btn btn-outline-danger btn-sm py-0">×</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <form method="post" action="/admin/groups/{{ group.id }}/assign" class="row g-1">
+        <div class="col-auto">
+          <select name="instance_id" class="form-select form-select-sm" required>
+            <option value="" disabled selected>Instanz…</option>
+            {% for inst in instances %}
+            <option value="{{ inst.id }}">{{ inst.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-auto">
+          <select name="role" class="form-select form-select-sm" required>
+            <option value="viewer">viewer</option>
+            <option value="manager">manager</option>
+          </select>
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-secondary btn-sm">Zuweisen</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="col-md-6">
+      <h6 class="small fw-bold text-uppercase text-muted">Mitglieder</h6>
+      {% set member_ids = members_by_group.get(group.id, []) %}
+      <ul class="list-group list-group-flush mb-2">
+        {% for uid in member_ids %}
+        <li class="list-group-item py-1 d-flex justify-content-between align-items-center">
+          <span>{% for u in users %}{% if u.id == uid %}{{ u.display_name or u.ldap_uid }}{% endif %}{% endfor %}</span>
+          <form method="post" action="/admin/groups/{{ group.id }}/remove-user/{{ uid }}">
+            <button type="submit" class="btn btn-outline-danger btn-sm py-0">×</button>
+          </form>
+        </li>
+        {% else %}
+        <li class="list-group-item py-1 text-muted small">Keine Mitglieder</li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="/admin/groups/{{ group.id }}/add-user" class="row g-1">
+        <div class="col-auto">
+          <select name="user_id" class="form-select form-select-sm" required>
+            <option value="" disabled selected>Benutzer…</option>
+            {% for u in users %}
+            <option value="{{ u.id }}">{{ u.display_name or u.ldap_uid }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-secondary btn-sm">Hinzufügen</button>
+        </div>
+      </form>
+    </div>
+
+  </div>
+</div>
+{% else %}
+<p class="text-muted">Keine Gruppen vorhanden.</p>
+{% endfor %}
+{% with extra_params = {} %}
+  {% include "admin/_pagination.html" %}
+{% endwith %}
+{% endblock %}

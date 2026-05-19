@@ -25,8 +25,8 @@ class LoaderConfig:
 
         # Ollama settings
         self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-        self.embeddings_model = os.getenv('EMBEDDINGS_MODEL', 'mxbai-embed-large')
-        self.llm_model = os.getenv('LLM_MODEL', 'qwen3.5:122b')
+        self.embeddings_model = os.getenv('EMBEDDINGS_MODEL', 'bge-m3')
+        self.llm_model = os.getenv('LLM_MODEL', 'qwen3.5:35b')
         self.embedder_type = os.getenv('EMBEDDER_TYPE', 'ollama')
         self.llm_type = os.getenv('LLM_TYPE', 'ollama')
 
@@ -39,18 +39,18 @@ class LoaderConfig:
         # General settings
         # CHUNK_SIZE and CHUNK_OVERLAP are now in tokens (not chars) — HuggingFace tokenizer is used
         self.chunk_size = int(os.getenv('CHUNK_SIZE', '400'))
-        self.chunk_overlap = int(os.getenv('CHUNK_OVERLAP', '40'))
+        self.chunk_overlap = int(os.getenv('CHUNK_OVERLAP', '60'))
         self.vector_store_path = Path(os.getenv('VECTOR_STORE_PATH', 'vector_store'))
         self.supported_extensions = os.getenv(
             'SUPPORTED_EXTENSIONS',
             '.txt,.md,.py,.pdf',
         ).split(',')
-        # mxbai-embed-large produces 1024-dimensional vectors
+        # bge-m3 produces 1024-dimensional vectors (up to 8192 token input)
         self.embedding_size = int(os.getenv('EMBEDDING_SIZE', '1024'))
-        # Max tokens per chunk before embedding (mxbai-embed-large hard limit: 512 BERT tokens)
-        self.embedding_max_tokens = int(os.getenv('EMBEDDING_MAX_TOKENS', '480'))
+        # Max tokens per chunk before embedding; 600 leaves room for ~100 token neighbor context on each side
+        self.embedding_max_tokens = int(os.getenv('EMBEDDING_MAX_TOKENS', '600'))
         # HuggingFace tokenizer ID — must match the embedding model's tokenizer
-        self.tokenizer_model_id = os.getenv('TOKENIZER_MODEL_ID', 'mixedbread-ai/mxbai-embed-large-v1')
+        self.tokenizer_model_id = os.getenv('TOKENIZER_MODEL_ID', 'BAAI/bge-m3')
         # OpenSearch analyzer for BM25 text field ('german', 'standard', 'english')
         self.opensearch_analyzer = os.getenv('OPENSEARCH_ANALYZER', 'german')
         self.opensearch_url = os.getenv('OPENSEARCH_URL', 'http://localhost:9200')
@@ -59,12 +59,19 @@ class LoaderConfig:
         self.opensearch_index_name = os.getenv('OPENSEARCH_INDEX_NAME', 'documents')
         self.redis_host = os.getenv('REDIS_HOST', 'localhost')
         self.redis_port = int(os.getenv('REDIS_PORT', '6379'))
+        self.redis_password = os.getenv('REDIS_PASSWORD', '') or None
 
         # Hybrid search settings
         self.hybrid_search_pipeline_name = os.getenv('HYBRID_SEARCH_PIPELINE_NAME', 'hybrid-rag-pipeline')
-        self.hybrid_bm25_weight = float(os.getenv('HYBRID_BM25_WEIGHT', '0.3'))
-        self.hybrid_knn_weight = float(os.getenv('HYBRID_KNN_WEIGHT', '0.7'))
+        self.hybrid_bm25_weight = float(os.getenv('HYBRID_BM25_WEIGHT', '0.4'))
+        self.hybrid_knn_weight = float(os.getenv('HYBRID_KNN_WEIGHT', '0.6'))
         self.hybrid_k = int(os.getenv('HYBRID_K', '10'))
+        # Minimum combined score for a retrieved chunk to be included in context (0.0 = disabled)
+        self.hybrid_score_threshold = float(os.getenv('HYBRID_SCORE_THRESHOLD', '0.1'))
+        # LLM parameters passed to Ollama
+        self.llm_num_ctx = int(os.getenv('LLM_NUM_CTX', '16384'))
+        self.llm_temperature = float(os.getenv('LLM_TEMPERATURE', '0.0'))
+        self.llm_timeout_seconds = int(os.getenv('LLM_TIMEOUT_SECONDS', '240'))
 
     def validate(self):
         """

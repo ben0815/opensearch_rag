@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Benutzer{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-3">
+  <h5 class="mb-0">Benutzer</h5>
+  <form method="get" action="/admin/users" class="d-flex gap-2 ms-3">
+    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+      placeholder="Name oder UID…" style="width:16rem">
+    <button type="submit" class="btn btn-outline-secondary btn-sm">Suchen</button>
+    {% if q %}<a href="/admin/users" class="btn btn-outline-danger btn-sm">×</a>{% endif %}
+  </form>
+  <div class="ms-auto d-flex gap-2">
+    <a href="/admin/instances" class="btn btn-outline-secondary btn-sm">Instanzen</a>
+    <a href="/admin/groups" class="btn btn-outline-secondary btn-sm">Gruppen</a>
+  </div>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle">
+    <thead>
+      <tr>
+        <th>Benutzername</th>
+        <th>Name</th>
+        <th>E-Mail</th>
+        <th>Admin</th>
+        <th>Gruppen</th>
+        <th>Instanz-Zuweisungen</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+      <td><code>{{ u.ldap_uid }}</code></td>
+      <td>{{ u.display_name or "" }}</td>
+      <td>{{ u.email or "" }}</td>
+      <td>
+        <form method="post" action="/admin/users/{{ u.id }}/set-admin" class="d-inline">
+          <input type="hidden" name="is_admin" value="{{ "false" if u.is_global_admin else "true" }}">
+          <button type="submit"
+            class="btn btn-sm {{ 'btn-warning' if u.is_global_admin else 'btn-outline-secondary' }}">
+            {{ "Admin" if u.is_global_admin else "Kein Admin" }}
+          </button>
+        </form>
+      </td>
+      <td>
+        {% for gname in groups_by_user.get(u.id, []) %}
+        <span class="badge bg-secondary me-1">{{ gname }}</span>
+        {% endfor %}
+      </td>
+      <td>
+        {% set mem_list = members_by_user.get(u.id, []) %}
+        {% for entry in mem_list %}
+        <div class="d-flex align-items-center gap-1 mb-1">
+          <span class="badge bg-primary">{{ entry.instance.name }}</span>
+          <span class="text-muted small">{{ entry.role }}</span>
+          <form method="post" action="/admin/users/{{ u.id }}/remove-instance/{{ entry.instance.id }}">
+            <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1">×</button>
+          </form>
+        </div>
+        {% endfor %}
+        <form method="post" action="/admin/users/{{ u.id }}/assign-instance"
+          class="row g-1 mt-1">
+          <div class="col-auto">
+            <select name="instance_id" class="form-select form-select-sm" required>
+              <option value="" disabled selected>Instanz…</option>
+              {% for inst in instances %}
+              <option value="{{ inst.id }}">{{ inst.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-auto">
+            <select name="role" class="form-select form-select-sm" required>
+              <option value="viewer">viewer</option>
+              <option value="manager">manager</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <button type="submit" class="btn btn-secondary btn-sm">Zuweisen</button>
+          </div>
+        </form>
+      </td>
+      <td>
+        {% if u.id != request.state.user.id %}
+        <form method="post" action="/admin/users/{{ u.id }}/delete"
+          data-confirm="Benutzer '{{ u.ldap_uid }}' und alle seine Daten (Verlauf, Sessions, Zuweisungen) wirklich löschen? LDAP-Nutzer können sich danach erneut anmelden und erhalten einen leeren neuen Account. Diese Aktion ist nicht rückgängig zu machen.">
+          <button type="submit" class="btn btn-outline-danger btn-sm">Löschen</button>
+        </form>
+        {% else %}
+        <span class="text-muted small">(eigener Account)</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="7" class="text-muted text-center">Keine Benutzer vorhanden.</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% with extra_params = {"q": q} if q else {} %}
+  {% include "admin/_pagination.html" %}
+{% endwith %}
+{% endblock %}

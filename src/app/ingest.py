@@ -16,6 +16,7 @@ _env_file = os.getenv('ENV_FILE') or str(Path(__file__).resolve().parents[2] / '
 load_dotenv(_env_file, override=False)
 
 from app.loader import DocumentProcessor, LoaderConfig, VectorStore  # noqa: E402
+from app.metadata.redis_service import RedisMetadataService  # noqa: E402
 from app.utils.logging_config import setup_logger  # noqa: E402
 
 logger = setup_logger(__name__)
@@ -51,7 +52,6 @@ async def ingest(files: list[Path], processor: DocumentProcessor) -> tuple[int, 
         try:
             last_progress = 0.0
             async for progress in processor.load_documents(file):
-                # Print progress on the same line
                 bar_len = 30
                 filled = int(bar_len * progress / 100)
                 bar = '█' * filled + '░' * (bar_len - filled)
@@ -75,12 +75,18 @@ async def main(args: argparse.Namespace) -> int:
         print('No PDF files to process. Exiting.')
         return 1
 
-    print(f'Found {len(files)} PDF file(s) to ingest.\n')
+    print(f'Found {len(files)} PDF file(s) to ingest into instance "{args.instance}".\n')
 
     config = LoaderConfig()
     config.validate()
-    vector_store = VectorStore(config)
-    processor = DocumentProcessor(config, vector_store)
+    vector_store = VectorStore.for_instance(config, args.instance)
+    redis_service = RedisMetadataService.from_config(config, args.instance)
+    processor = DocumentProcessor(
+        config=config,
+        vector_store=vector_store,
+        instance_slug=args.instance,
+        redis_service=redis_service,
+    )
 
     success, failure = await ingest(files, processor)
 
@@ -104,6 +110,11 @@ def cli() -> None:
         '-r', '--recursive',
         action='store_true',
         help='Recurse into subdirectories when a directory is given.',
+    )
+    parser.add_argument(
+        '--instance',
+        required=True,
+        help='Instanz-Slug (z.B. "finanzen"). Muss in OpenSearch als Index existieren.',
     )
     args = parser.parse_args()
     sys.exit(asyncio.run(main(args)))

@@ -1,152 +1,97 @@
-# Infrastructure Configuration
+# infra/
 
-This directory contains the infrastructure configuration for the LangChain OpenSearch RAG application.
+Docker-Compose-Stack und Infrastrukturkonfiguration.
 
-## Components
+## Stack starten
 
-- **Docker Compose**: Configuration for all services
-- **Redis**: Configuration for Redis cache
-- **Scripts**: Helper scripts for health checks and maintenance
-- **Secrets**: Environment variables and secrets
+```bash
+cd infra
+docker compose up -d
+```
 
-## Docker Compose Services
+## Services
 
-### OpenSearch
+### opensearch
+Vektor-Datenbank für Dokument-Embeddings und BM25-Volltextsuche.
 
-Vector database for storing document embeddings and metadata.
+- **Image**: `opensearchproject/opensearch:3.6.0`
+- **Port**: 9200 (HTTP), 9600 (Performance Analyzer)
+- **Security Plugin**: deaktiviert (`DISABLE_SECURITY_PLUGIN=true`) — internes Deployment
+- **Memory**: 512 MB Heap (`OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m`)
+- **Volume**: `opensearch-data` (persistent)
 
-- **Image**: opensearchproject/opensearch:2.11.1
-- **Ports**: 9200 (HTTP), 9600 (Performance Analyzer)
-- **Volume**: opensearch-data (persistent storage)
-- **Environment Variables**:
-  - `DISABLE_SECURITY_PLUGIN=true`: Disables security for development
-  - `OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m`: Memory settings
+Pro Instanz wird ein eigener Index angelegt: `documents_{slug}`. Die Hybrid-Search-Pipeline (`hybrid-rag-pipeline`) kombiniert BM25 und kNN mit min_max-Normalisierung.
 
-### OpenSearch Dashboards
+### app
+FastAPI-Anwendung (uvicorn).
 
-Web interface for OpenSearch management.
-
-- **Image**: opensearchproject/opensearch-dashboards:2.11.1
-- **Port**: 5601
-- **Dependencies**: Requires OpenSearch to be healthy
-
-### Ollama
-
-Local LLM inference service.
-
-- **Build**: Custom Dockerfile with curl for health checks
-- **Port**: 11434
-- **Volume**: Maps local ~/.ollama to container for model sharing
-- **Environment Variables**:
-  - `DOWNLOAD_MODELS`: Set to false to prevent automatic downloads
-  - `MODELS`: Comma-separated list of models to use
-- **Resource Limits**: 8GB memory, 4 CPUs
-
-### App
-
-Main application service with Gradio web interface.
-
-- **Build**: Custom Dockerfile from project root
 - **Port**: 8081
-- **Volumes**:
-  - Source code: For live development
-  - Logs: For persistent logging
-  - Secrets: For environment variables
-- **Environment Variables**:
-  - `OLLAMA_HOST`: URL for Ollama API
-  - `EMBEDDINGS_MODEL`: Model for embeddings
-  - `LLM_MODEL`: Model for text generation
-  - `OPENSEARCH_URL`: URL for OpenSearch
-  - `REDIS_HOST`: Hostname for Redis
+- **Build**: `Dockerfile` im Projekt-Root
+- **Einstiegspunkt**: `uvicorn app.app_fastapi:app`
+- **Volumes**: `../src` → `/app/src` (Live-Code), `./logs`
+- **Ollama**: läuft **auf dem Host**, erreichbar via `host.docker.internal:11434`
+- **Depends on**: opensearch (healthy), redis (healthy), postgres (healthy)
 
-### Redis
+### redis
+Speichert Dokument-Metadaten als JSON-Strings.
 
-Caching service for improved performance.
-
-- **Image**: redis:7.2-alpine
+- **Image**: `redis:7.2-alpine`
 - **Port**: 6379
-- **Volume**: redis_data (persistent storage)
-- **Configuration**: Custom redis.conf file
+- **Key-Schema**: `doc:{instance_slug}:{sha256}` → JSON (`DocumentMetadata`)
+- **Config**: `redis/redis.conf` (maxmemory 512 MB, allkeys-lru, RDB-Persistenz)
+- **Volume**: `redis_data` (persistent)
 
-## Network Configuration
+### postgres
+Relationale Datenbank für Anwendungsdaten.
 
-All services are connected to the `opensearch-network` bridge network, allowing them to communicate using service names as hostnames.
+- **Image**: `postgres:16-alpine`
+- **Initialisierung**: `postgres/init.sql`
+- **Datenbank**: `ragdb`, **Benutzer**: `raguser`
+- **Volume**: `postgres_data` (persistent)
+- **Tabellen**: `users`, `instances`, `instance_members`, `groups`, `group_members`, `group_instance_roles`, `sessions`, `chat_history`
+
+## Konfiguration
+
+### infra/.env
+Einzige Konfigurationsdatei — **nicht in Git**. Vorlage: `infra/.env.example`.
+
+```bash
+cp infra/.env.example infra/.env
+# Anpassen: POSTGRES_PASSWORD, LDAP_URL, LLM_MODEL, …
+```
+
+### Precedence (höchste zuerst)
+1. docker-compose `environment:` (aus `infra/.env`)
+2. `load_dotenv(..., override=False)` im Python-Code (Fallback für lokale Entwicklung ohne Docker)
+
+## Netzwerk
+
+Alle Services sind im Bridge-Netzwerk `opensearch-network` und erreichbar unter ihrem Service-Namen (`opensearch`, `redis`, `postgres`, `app`). Die App erhält zusätzlich `host.docker.internal` → Host-Gateway für Ollama-Zugriff.
+
+## Debugging
+
+```bash
+# Status aller Services
+docker compose ps
+
+# Logs eines Service
+docker compose logs -f app
+docker compose logs -f opensearch
+
+# OpenSearch-Index prüfen
+curl http://localhost:9200/_cat/indices?v
+
+# Redis-Keys einer Instanz
+docker compose exec redis redis-cli KEYS "doc:*"
+
+# PostgreSQL-Verbindung
+docker compose exec postgres psql -U raguser -d ragdb
+```
 
 ## Volumes
 
-- **opensearch-data**: Persistent storage for OpenSearch
-- **redis_data**: Persistent storage for Redis
-
-## Configuration
-
-### Redis Configuration
-
-Redis is configured using the `redis/redis.conf` file. Key settings:
-
-- **maxmemory**: 512MB
-- **maxmemory-policy**: allkeys-lru (Least Recently Used eviction)
-
-### Environment Variables
-
-Create a `.env` file in the `secrets` directory with any custom environment variables.
-
-## Health Checks
-
-All services include health checks to ensure dependencies are properly managed:
-
-- **OpenSearch**: Checks HTTP endpoint
-- **OpenSearch Dashboards**: Checks status endpoint
-- **Ollama**: Checks API version endpoint
-- **App**: Checks HTTP endpoint
-- **Redis**: Uses redis-cli ping
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Service Dependencies**: If services fail to start, check the health of their dependencies
-2. **Resource Constraints**: Reduce resource limits if your system has limited memory
-3. **Network Issues**: Ensure all services are on the same network
-4. **Volume Permissions**: Check permissions if volume mounts fail
-
-### Debugging Commands
-
-```bash
-# Check service status
-docker-compose -f docker-compose.yml ps
-
-# View service logs
-docker-compose -f docker-compose.yml logs -f [service_name]
-
-# Check network connectivity
-docker-compose -f docker-compose.yml exec app ping redis
-docker-compose -f docker-compose.yml exec app curl -f http://opensearch:9200
-
-# Check Redis connectivity
-docker-compose -f docker-compose.yml exec app redis-cli -h redis ping
-
-# Check Ollama API
-docker-compose -f docker-compose.yml exec app curl -f http://host.docker.internal:11434/api/version
-```
-
-## Customization
-
-### Using Different Models
-
-To use different models with Ollama:
-
-1. Pull the models locally:
-   ```bash
-   ollama pull your-model-name
-   ```
-
-2. Update the `EMBEDDINGS_MODEL` and `LLM_MODEL` environment variables in docker-compose.yml
-
-### Scaling Services
-
-For production deployments, consider:
-
-1. Increasing OpenSearch resources
-2. Adding multiple OpenSearch nodes
-3. Implementing proper security (disable `DISABLE_SECURITY_PLUGIN`)
-4. Using a production-ready Redis configuration
+| Volume | Inhalt |
+|---|---|
+| `opensearch-data` | OpenSearch-Shards und Indizes |
+| `redis_data` | Redis-RDB-Snapshot (Dokument-Metadaten) |
+| `postgres_data` | PostgreSQL-Datenbankdateien |

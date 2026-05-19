@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Instanzen{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-3">
+  <h5 class="mb-0">Instanzen</h5>
+  <div class="ms-auto d-flex gap-2">
+    <a href="/admin/groups" class="btn btn-outline-secondary btn-sm">Gruppen</a>
+    <a href="/admin/users" class="btn btn-outline-secondary btn-sm">Benutzer</a>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Neue Instanz anlegen</div>
+  <div class="card-body">
+    <form method="post" action="/admin/instances/create" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label small">Name</label>
+        <input type="text" name="name" class="form-control form-control-sm" required>
+      </div>
+      <div class="col-auto">
+        <label class="form-label small">Beschreibung</label>
+        <input type="text" name="description" class="form-control form-control-sm">
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary btn-sm">Anlegen</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-sm table-hover">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Slug</th>
+        <th>Beschreibung</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for inst in instances %}
+    <tr>
+      <td>{{ inst.id }}</td>
+      <td>{{ inst.name }}</td>
+      <td><code>{{ inst.slug }}</code></td>
+      <td>{{ inst.description or "" }}</td>
+      <td>
+        <form method="post" action="/admin/instances/delete/{{ inst.id }}"
+          data-confirm="Instanz und alle zugehörigen Daten löschen?">
+          <button type="submit" class="btn btn-danger btn-sm">Löschen</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="5" class="text-muted text-center">Keine Instanzen vorhanden.</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

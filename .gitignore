@@ -15,7 +15,6 @@ env/
 # Environment / secrets
 .env
 infra/.env
-infra/secrets/*.env
 
 # Certificates and keys
 *.pem
@@ -32,3 +31,4 @@ logs/
 
 # ideen
 ideen.md
+konzept_*.md

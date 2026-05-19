@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -14,10 +15,17 @@ from app.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
+# Module-level cache keyed by instance_slug — allows instance_service.delete_instance()
+# to invalidate a specific entry without importing the class itself.
+_store_cache: dict[str, "VectorStore"] = {}
+_store_cache_lock = threading.Lock()
+
 
 class VectorStore:
-    def __init__(self, config: LoaderConfig):
+    def __init__(self, config: LoaderConfig, instance_slug: str = "default"):
         self.config = config
+        self._instance_slug = instance_slug
+        self._index_name = f"documents_{instance_slug}"
         self.embedder_type = config.embedder_type
         self.embeddings = self.get_embeddings()
         self._index_mapping = self._get_index_mapping()
@@ -25,6 +33,23 @@ class VectorStore:
         self._ensure_index()
         self._ensure_search_pipeline()
         self._store: OpenSearchVectorSearch | None = None
+
+    @classmethod
+    def for_instance(cls, config: "LoaderConfig", instance_slug: str) -> "VectorStore":
+        """Factory: gibt gecachten VectorStore für einen Instanz-Slug zurück.
+        Bewusst NICHT get_store() — die bestehende Instance-Methode get_store()
+        gibt OpenSearchVectorSearch zurück und wird von document_processor.py genutzt.
+        Ein Namenskonflikt würde diese leise überschreiben.
+
+        Double-Checked Lock: äußere Prüfung vermeidet Lock-Overhead im Normalfall,
+        innere Prüfung schließt die Race Condition zwischen mehreren Threads aus,
+        die gleichzeitig einen Cache-Miss sehen."""
+        if instance_slug in _store_cache:
+            return _store_cache[instance_slug]
+        with _store_cache_lock:
+            if instance_slug not in _store_cache:
+                _store_cache[instance_slug] = cls(config, instance_slug)
+            return _store_cache[instance_slug]
 
     def get_embeddings(self):
         if self.embedder_type == 'bedrock':
@@ -57,11 +82,10 @@ class VectorStore:
         """Ensure the OpenSearch index exists with proper configuration."""
         try:
             client = self._get_raw_client()
-            index_name = self.config.opensearch_index_name
-            if not client.indices.exists(index=index_name):
-                logger.info(f'Creating index {index_name} with optimized settings')
+            if not client.indices.exists(index=self._index_name):
+                logger.info(f'Creating index {self._index_name} with optimized settings')
                 client.indices.create(
-                    index=index_name,
+                    index=self._index_name,
                     body=self._index_mapping,
                 )
         except Exception as e:
@@ -132,7 +156,7 @@ class VectorStore:
         try:
             response = self._get_raw_client().search(
                 body=search_body,
-                index=self.config.opensearch_index_name,
+                index=self._index_name,
                 params={'search_pipeline': self.config.hybrid_search_pipeline_name},
             )
         except Exception as e:
@@ -144,8 +168,6 @@ class VectorStore:
             source = hit['_source']
             score = round(float(hit['_score']), 4)
             content = source.get('text', '')
-            # LangChain's add_texts stores document metadata nested under a 'metadata' key.
-            # Fall back to the flat source dict for forward compatibility.
             nested = source.get('metadata')
             metadata = dict(nested) if isinstance(nested, dict) else {k: v for k, v in source.items() if k != 'text'}
             metadata['score'] = score
@@ -221,7 +243,7 @@ class VectorStore:
             self._store = OpenSearchVectorSearch(
                 embedding_function=self.embeddings,
                 opensearch_url=self.config.opensearch_url,
-                index_name=self.config.opensearch_index_name,
+                index_name=self._index_name,
                 engine='lucene',
                 timeout=300,
                 connection_class=RequestsHttpConnection,

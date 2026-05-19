@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Any, Generator
 
 from langchain_core.prompts import PromptTemplate
@@ -17,52 +18,68 @@ from app.utils.logging_config import setup_logger
 logger = setup_logger(__name__)
 
 _llm_cache: dict[str, OllamaLLM | Any] = {}
+_llm_cache_lock = threading.Lock()
 
 _PROMPT_TEMPLATE = PromptTemplate(
-    template="""
-        Use the following pieces of context to answer the question.
-        If you don't know the answer, just say that you don't know, don't try to make up an answer.
-        Try to be as detailed as possible while remaining accurate.
-        Always consider the full context including any previous or next sections provided.
+    template="""/no_think Du bist ein präziser Assistent. Beantworte die Frage ausschließlich \
+auf Basis der folgenden Kontext-Abschnitte aus den Dokumenten. Antworte ausschließlich auf Deutsch.
 
-        Context: {context}
+Wenn die Antwort nicht im Kontext enthalten ist, antworte exakt:
+"Die gesuchte Information wurde in den verfügbaren Dokumenten nicht gefunden."
 
-        Question: {question}
+Erfinde keine Informationen und ergänze nichts aus eigenem Wissen.
+{history}
+Kontext:
+{context}
 
-        Answer: Let me help you with that.
-    """,
-    input_variables=['context', 'question'],
+Frage: {question}
+
+Antwort:""",
+    input_variables=["context", "question", "history"],
 )
 
 
-def get_llm(config: LoaderConfig) -> BedrockLLM | OllamaLLM:
-    """
-    Get the LLM based on configuration (cached per model key).
+def _format_history(history) -> str:
+    """Format chat history entries for the prompt."""
+    if not history:
+        return ""
+    parts = ["Bisheriges Gespräch:"]
+    for entry in history:
+        parts.append(f"Frage: {entry.question}\nAntwort: {entry.answer}")
+    return "\n\n".join(parts) + "\n\n"
 
-    Returns:
-        LLM instance
-    """
+
+def get_llm(config: LoaderConfig) -> BedrockLLM | OllamaLLM:
+    """Get the LLM based on configuration (cached per model key)."""
     llm_type = config.llm_type
     cache_key = f'{llm_type}:{config.llm_model}'
 
-    if cache_key not in _llm_cache:
+    if cache_key in _llm_cache:
+        return _llm_cache[cache_key]
+
+    with _llm_cache_lock:
+        if cache_key in _llm_cache:
+            return _llm_cache[cache_key]
         if llm_type.lower() == 'bedrock':
             from langchain_aws import BedrockLLM
-            _llm_cache[cache_key] = BedrockLLM(
+            llm = BedrockLLM(
                 credentials_profile_name='default',
                 region_name=config.region_name,
                 endpoint_url=config.endpoint_url,
                 model_id=config.model_id,
-                model_kwargs={'temperature': 0.7, 'max_tokens_to_sample': 4096},
+                model_kwargs={'temperature': 0.0, 'max_tokens_to_sample': 4096},
             )
         elif llm_type.lower() == 'ollama':
-            _llm_cache[cache_key] = OllamaLLM(
+            llm = OllamaLLM(
                 base_url=config.ollama_host,
                 model=config.llm_model,
-                temperature=0.7,
+                temperature=config.llm_temperature,
+                timeout=config.llm_timeout_seconds,
+                num_ctx=config.llm_num_ctx,
             )
         else:
             raise ValueError(f'Unsupported LLM type: {llm_type}')
+        _llm_cache[cache_key] = llm
 
     return _llm_cache[cache_key]
 
@@ -72,19 +89,15 @@ def retrieve(
     config: LoaderConfig,
     vector_store: VectorStore,
 ) -> tuple[list[Document], dict]:
-    """
-    Perform hybrid search (BM25 + kNN) and return deduplicated docs.
-
-    Returns:
-        Tuple of (unique_docs, search_metadata)
-    """
+    """Perform hybrid search (BM25 + kNN) and return deduplicated docs."""
     cleaned_question = question.strip()
     results_with_scores = vector_store.hybrid_search(cleaned_question)
 
     seen: set[str] = set()
     unique_results: list = []
-    for doc, _ in results_with_scores:
-        if doc.page_content not in seen:
+    threshold = config.hybrid_score_threshold
+    for doc, score in results_with_scores:
+        if doc.page_content not in seen and score >= threshold:
             seen.add(doc.page_content)
             unique_results.append(doc)
 
@@ -101,18 +114,21 @@ def generate_stream(
     question: str,
     docs: list[Document],
     config: LoaderConfig,
+    history=None,
 ) -> Generator[str, None, None]:
-    """
-    Stream LLM tokens for the given question and retrieved context docs.
+    """Stream LLM tokens. Returns a generator yielding token strings."""
+    if not docs:
+        def _empty():
+            yield "Zu dieser Frage wurden keine relevanten Dokumente gefunden."
+        return _empty()
 
-    Returns:
-        Generator yielding token strings
-    """
-    context = '\n\n'.join([doc.page_content for doc in docs[:5]])
+    context = '\n\n'.join([doc.page_content for doc in docs])
+    history_text = _format_history(history)
     chain = (
         {
             'context': lambda x: context,
             'question': RunnablePassthrough(),
+            'history': lambda x: history_text,
         }
         | _PROMPT_TEMPLATE
         | get_llm(config)
@@ -122,12 +138,7 @@ def generate_stream(
 
 
 def search(question: str, config: LoaderConfig, vector_store: VectorStore):
-    """
-    Blocking search — retrieves docs and generates a complete answer.
-
-    Returns:
-        Tuple of (retrieved_docs, rag_result_dict)
-    """
+    """Blocking search — retrieves docs and generates a complete answer."""
     try:
         unique_results, search_metadata = retrieve(question, config, vector_store)
         rag_result = ''.join(generate_stream(question, unique_results, config))

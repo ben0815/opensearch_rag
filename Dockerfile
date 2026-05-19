@@ -44,6 +44,10 @@ COPY infra/scripts/entrypoint.sh ./entrypoint.sh
 # Install the application
 RUN pip install --no-cache-dir -e .
 
+# Pre-download tokenizer into a fixed path that the runtime stage can copy
+ENV HF_HOME=/build/.cache/huggingface
+RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('BAAI/bge-m3', local_files_only=False)"
+
 # Runtime stage
 FROM python:3.12-slim
 
@@ -52,20 +56,18 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
-# Create directory for secrets
-RUN mkdir -p /app/secrets
-
-# Copy installed packages and application files
+# Copy installed packages, application files, and pre-downloaded tokenizer cache
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /build/src /app/src
 COPY --from=builder /build/setup.py /app/setup.py
+COPY --from=builder /build/.cache/huggingface /app/.cache/huggingface
 
 # Set environment variables
 ENV PYTHONPATH=/app/src:$PYTHONPATH \
     PYTHONUNBUFFERED=1 \
     APP_HOST=0.0.0.0 \
     APP_PORT=8081 \
-    ENV_FILE=/app/secrets/.env
+    HF_HOME=/app/.cache/huggingface
 
 # Install runtime dependencies with retry mechanism
 RUN set -eux; \
@@ -85,7 +87,7 @@ USER appuser
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${APP_PORT}/status || exit 1
+    CMD curl -f http://localhost:${APP_PORT}/health || exit 1
 
 # Add script to load environment variables
 #COPY --chown=appuser:appuser infra/scripts/entrypoint.sh /app/entrypoint.sh
@@ -94,4 +96,4 @@ RUN chmod +x /app/entrypoint.sh
 
 # Command to run the application
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["app.app_rag"]
+CMD ["uvicorn", "app.app_fastapi:app", "--host", "0.0.0.0", "--port", "8081"]

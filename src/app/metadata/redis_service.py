@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import redis.asyncio as redis
 from pydantic import BaseModel
 
 from app.utils.logging_config import setup_logger
@@ -26,86 +25,40 @@ class DocumentMetadata(BaseModel):
 
 
 class RedisMetadataService:
-    """Redis service for document metadata management."""
+    """Redis service for document metadata management.
 
-    def __init__(self, host: str = 'localhost', port: int = 6379, db: int = 0) -> None:
-        """
-        Initialize Redis metadata service.
+    Key schema: doc:<instance_slug>:<sha256>
+    No separate index set — SCAN doc:<slug>:* is used for listing.
+    """
 
-        Args:
-            host: Redis host
-            port: Redis port
-            db: Redis database number
-        """
-        self.redis_url = f'redis://{host}:{port}/{db}'
-        self._redis: redis.Redis | None = None
-        self.doc_metadata_key = 'doc_metadata:'
+    def __init__(self, redis_client, instance_slug: str) -> None:
+        self._redis = redis_client      # Injected — keine eigene Verbindung verwalten
+        self._slug = instance_slug
 
-    async def connect(self) -> None:
-        """Establish Redis connection."""
+    @classmethod
+    def from_config(cls, config, instance_slug: str) -> "RedisMetadataService":
+        """Für CLI-Nutzung: erstellt eigene Redis-Verbindung aus Config."""
+        import redis.asyncio as aioredis
+        kwargs = dict(host=config.redis_host, port=config.redis_port, decode_responses=True)
+        if config.redis_password:
+            kwargs["password"] = config.redis_password
+        return cls(aioredis.Redis(**kwargs), instance_slug)
+
+    def _key(self, file_hash: str) -> str:
+        return f"doc:{self._slug}:{file_hash}"
+
+    async def save_document_metadata(self, doc_id: str, metadata: DocumentMetadata) -> bool:
         try:
-            self._redis = redis.from_url(self.redis_url, decode_responses=True)
-            await self._redis.ping()
-            logger.info('Successfully connected to Redis')
-        except Exception as e:
-            logger.error(f'Failed to connect to Redis: {e}')
-            raise
-
-    async def close(self) -> None:
-        """Close Redis connection."""
-        if self._redis:
-            await self._redis.close()
-            logger.info('Redis connection closed')
-
-    async def save_document_metadata(
-        self,
-        doc_id: str,
-        metadata: DocumentMetadata,
-    ) -> bool:
-        """
-        Save document metadata to Redis.
-
-        Args:
-            doc_id: Document identifier
-            metadata: Document metadata
-
-        Returns:
-            True if successful
-        """
-        try:
-            if not self._redis:
-                await self.connect()
-
-            key = f'{self.doc_metadata_key}{doc_id}'
-            await self._redis.set(key, metadata.model_dump_json())
-
-            # Add to document index set
-            await self._redis.sadd('indexed_documents', doc_id)
-
-            logger.info(f'Saved metadata for document {doc_id}')
+            await self._redis.set(self._key(doc_id), metadata.model_dump_json())
+            logger.info(f'Saved metadata for document {doc_id} (instance={self._slug})')
             return True
         except Exception as e:
             logger.error(f'Error saving document metadata: {e}')
             return False
 
     async def get_document_metadata(self, doc_id: str) -> DocumentMetadata | None:
-        """
-        Retrieve document metadata from Redis.
-
-        Args:
-            doc_id: Document identifier
-
-        Returns:
-            Document metadata if found
-        """
         try:
-            if not self._redis:
-                await self.connect()
-
-            key = f'{self.doc_metadata_key}{doc_id}'
-            logger.info(f'Retrieving metadata for document {doc_id} from Redis')
-            data = await self._redis.get(key)
-
+            data = await self._redis.get(self._key(doc_id))
             if data:
                 return DocumentMetadata.model_validate_json(data)
             return None
@@ -114,51 +67,50 @@ class RedisMetadataService:
             return None
 
     async def get_all_documents(self) -> list[DocumentMetadata]:
-        """
-        Retrieve all document metadata.
-
-        Returns:
-            List of document metadata
-        """
+        """Gibt alle Dokument-Metadaten als Pydantic-Modelle zurück (für DocumentProcessor).
+        Verwendet SCAN statt KEYS — blockiert Redis nicht bei vielen Keys."""
+        pattern = f"doc:{self._slug}:*"
+        docs = []
+        cursor = 0
         try:
-            if not self._redis:
-                await self.connect()
-
-            doc_ids = await self._redis.smembers('indexed_documents')
-            if not doc_ids:
-                return []
-
-            keys = [f'{self.doc_metadata_key}{doc_id}' for doc_id in doc_ids]
-            values = await self._redis.mget(*keys)
-
-            return [
-                DocumentMetadata.model_validate_json(v)
-                for v in values
-                if v is not None
-            ]
+            while True:
+                cursor, keys = await self._redis.scan(cursor=cursor, match=pattern, count=100)
+                if keys:
+                    values = await self._redis.mget(*keys)
+                    for v in values:
+                        if v is not None:
+                            docs.append(DocumentMetadata.model_validate_json(v))
+                if cursor == 0:
+                    break
         except Exception as e:
             logger.error(f'Error retrieving all documents: {e}')
-            return []
+        return docs
+
+    async def list_all_documents(self) -> list[dict]:
+        """Gibt alle Dokument-Metadaten als Dicts zurück (für die Web-UI)."""
+        return [doc.model_dump() for doc in await self.get_all_documents()]
+
+    async def delete_all_documents(self) -> int:
+        """Löscht alle Redis-Keys für diese Instanz. Gibt Anzahl gelöschter Keys zurück."""
+        pattern = f"doc:{self._slug}:*"
+        deleted = 0
+        cursor = 0
+        try:
+            while True:
+                cursor, keys = await self._redis.scan(cursor=cursor, match=pattern, count=100)
+                if keys:
+                    await self._redis.delete(*keys)
+                    deleted += len(keys)
+                if cursor == 0:
+                    break
+        except Exception as e:
+            logger.error(f'Error deleting all documents for instance {self._slug}: {e}')
+        return deleted
 
     async def delete_document_metadata(self, doc_id: str) -> bool:
-        """
-        Delete document metadata from Redis.
-
-        Args:
-            doc_id: Document identifier
-
-        Returns:
-            True if successful
-        """
         try:
-            if not self._redis:
-                await self.connect()
-
-            key = f'{self.doc_metadata_key}{doc_id}'
-            await self._redis.delete(key)
-            await self._redis.srem('indexed_documents', doc_id)
-
-            logger.info(f'Deleted metadata for document {doc_id}')
+            await self._redis.delete(self._key(doc_id))
+            logger.info(f'Deleted metadata for document {doc_id} (instance={self._slug})')
             return True
         except Exception as e:
             logger.error(f'Error deleting document metadata: {e}')

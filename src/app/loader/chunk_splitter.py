@@ -10,7 +10,7 @@ from app.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
-_DEFAULT_TOKENIZER_MODEL = 'mixedbread-ai/mxbai-embed-large-v1'
+_DEFAULT_TOKENIZER_MODEL = 'BAAI/bge-m3'
 
 
 @lru_cache(maxsize=4)
@@ -40,7 +40,7 @@ class ChunkSplitter:
         self,
         chunk_size: int,
         chunk_overlap: int,
-        embedding_max_tokens: int = 480,
+        embedding_max_tokens: int = 600,
         tokenizer_model_id: str = _DEFAULT_TOKENIZER_MODEL,
     ):
         self.chunk_size = chunk_size
@@ -207,7 +207,7 @@ class ChunkSplitter:
         self,
         text: str,
         is_previous: bool,
-        max_length: int = 200,
+        max_length: int = 600,
     ) -> str:
         """
         Extract most relevant context from neighboring chunk.

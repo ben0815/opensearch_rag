@@ -1,191 +1,327 @@
-# LangChain OpenSearch RAG
+# OpenSearch RAG
 
-A Retrieval-Augmented Generation (RAG) application using LangChain, OpenSearch, and Ollama for local LLM inference.
+Multi-mandantenfähige RAG-Anwendung (Retrieval-Augmented Generation) auf Basis von FastAPI, OpenSearch und Ollama. PDFs werden in token-basierte Chunks zerlegt, mit lokalen Embedding-Modellen vektorisiert und in mandantenspezifischen OpenSearch-Indizes gespeichert. Benutzer authentifizieren sich via LDAP und können Dokumente hochladen sowie im Chat befragen.
 
-![Demo](demo.gif)
+## Funktionsumfang
 
-## Overview
+- **Multi-Tenant**: Instanzen (Dokumentsammlungen) mit Rollen `viewer` (Chat) und `manager` (Upload/Löschen)
+- **Hybrid Search**: BM25 + kNN mit konfigurierbaren Gewichten, Score-Normalisierung via OpenSearch Pipeline
+- **SSE-Streaming**: LLM-Antworten und Upload-Fortschritt werden live gestreamt
+- **LDAP-Auth**: Bind als Benutzer, Account-Status-Prüfung (`pwdAccountLockedTime`, `shadowExpire`), optionaler Admin-Gruppen-Check; lokaler bcrypt-Fallback für Bootstrap-Admin
+- **Admin-UI**: Instanzen, Gruppen und Benutzer verwalten, Gruppen-Instanz-Zuweisungen, direkte Benutzer-Instanz-Zuweisungen
+- **Chat-Verlauf**: durchsuchbar, nach Instanz filterbar; letzten 3 Frage/Antwort-Paare fließen als Gesprächskontext in Folgefragen ein
+- **Rate Limiting**: Login auf 10 Versuche/Minute, Chat-Stream auf 30 Anfragen/Minute begrenzt
 
-This project implements a document processing and question-answering system that:
+## Voraussetzungen
 
-1. Processes documents from various formats (PDF, TXT, MD, PY)
-2. Generates embeddings using local models via Ollama
-3. Stores document chunks and embeddings in OpenSearch
-4. Provides a Gradio web interface for document upload and querying
-5. Uses Redis for caching to improve performance
-
-## Architecture
-
-The system consists of the following components:
-
-- **App Service**: Python application with Gradio web interface
-- **OpenSearch**: Vector database for storing document embeddings
-- **OpenSearch Dashboards**: Web interface for OpenSearch management
-- **Redis**: Caching layer that saves metadata from processed documents
-- **Ollama**: Local inference for embeddings and LLM responses
-
-## Prerequisites
-
-- Docker and Docker Compose
-- Ollama installed locally (optional, can use containerized version)
-- At least 8GB RAM for running all services
-- Git
-
-## Quick Start
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/langchain-opensearch-rag.git
-   cd langchain-opensearch-rag
-   ```
-
-2. Create a `.env` file in the `infra/secrets` directory:
-   ```bash
-   mkdir -p infra/secrets
-   touch infra/secrets/.env
-   ```
-
-3. Start the services:
-   ```bash
-   docker-compose -f infra/docker-compose.yml up -d
-   ```
-
-4. Access the web interface at http://localhost:8081
-
-## Configuration
-
-### Environment Variables
-
-Key environment variables that can be configured:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| OLLAMA_HOST | URL for Ollama API | http://host.docker.internal:11434 |
-| EMBEDDINGS_MODEL | Model for generating embeddings | mxbai-embed-large |
-| LLM_MODEL | Model for text generation | phi3.5 |
-| OPENSEARCH_URL | URL for OpenSearch | http://opensearch:9200 |
-| REDIS_HOST | Hostname for Redis | redis |
-| CHUNK_SIZE | Size of document chunks | 1000 |
-| CHUNK_OVERLAP | Overlap between chunks | 200 |
-
-### Using Local Ollama
-
-The default configuration uses your local Ollama installation. Make sure Ollama is running:
+- Docker und Docker Compose
+- Ollama läuft **lokal auf dem Host** (`ollama serve`), nicht im Container
 
 ```bash
-ollama serve
+ollama pull bge-m3              # Embedding-Modell (multilingual, 1024 dim)
+ollama pull qwen3.5:35b         # LLM — 35B Parameter, nur 3B aktiv (MoE), empfohlen
+# Alternativ für mehr Kapazität:
+# ollama pull qwen3.5:122b      # 122B Parameter, nur 10B aktiv
 ```
 
-And that you have the required models:
+## Schnellstart
 
 ```bash
-ollama pull mxbai-embed-large
-ollama pull phi3.5
+# 1. Konfiguration anlegen
+cp infra/.env.example infra/.env
+# infra/.env nach Bedarf anpassen (Passwörter, Modellnamen, LDAP-URL …)
+
+# 2. Stack starten
+cd infra && docker compose up -d
+
+# 3. Ersten Admin anlegen
+docker exec -it app python -m app.cli.admin create-admin <benutzername> <passwort>
 ```
 
-## Usage
+Die Web-App ist danach unter **http://localhost:8081** erreichbar.
 
-### Web Interface
+## Konfiguration
 
-1. **Upload Documents**: Use the web interface to upload documents (PDF, TXT, MD, PY)
-2. **Process Documents**: The system will chunk, embed, and store the documents
-3. **Ask Questions**: Query the system about the content of your documents
-4. **View Sources**: See which document chunks were used to generate the answer
+Alle Variablen werden in `infra/.env` gesetzt (Vorlage: `infra/.env.example`). Im Docker-Betrieb werden sie von docker-compose geladen; bei lokaler Entwicklung ohne Docker liest die App die `.env`-Datei direkt über `load_dotenv`.
 
-### Bulk Ingestion via CLI
+### Überblick aller Variablen
 
-To ingest many PDF files without the web interface, use the `ingest` module:
+| Variable | Standard | Beschreibung |
+|---|---|---|
+| `OLLAMA_HOST` | `http://host.docker.internal:11434` | Ollama-URL (Host-intern) |
+| `EMBEDDINGS_MODEL` | `bge-m3` | Embedding-Modell (multilingual, 1024 dim) |
+| `EMBEDDING_SIZE` | `1024` | Vektor-Dimension — muss exakt zum Modell passen |
+| `LLM_MODEL` | `qwen3.5:35b` | Sprachmodell für Chat-Antworten |
+| `LLM_TEMPERATURE` | `0.0` | Kreativität des LLM (0.0 = deterministisch) |
+| `LLM_TIMEOUT_SECONDS` | `240` | Maximale Wartezeit auf LLM-Antwort |
+| `LLM_NUM_CTX` | `16384` | Kontextfenster des LLM in Tokens |
+| `CHUNK_SIZE` | `400` | Chunk-Größe in Tokens |
+| `CHUNK_OVERLAP` | `60` | Überlapp zwischen Chunks in Tokens |
+| `EMBEDDING_MAX_TOKENS` | `600` | Token-Limit pro Chunk vor dem Embedding |
+| `TOKENIZER_MODEL_ID` | `BAAI/bge-m3` | HuggingFace-Tokenizer für Token-Zählung |
+| `OPENSEARCH_ANALYZER` | `german` | Sprachanalysator für BM25-Volltextsuche |
+| `HYBRID_BM25_WEIGHT` | `0.4` | Gewichtung der Volltextsuche (BM25) im Hybrid-Score |
+| `HYBRID_KNN_WEIGHT` | `0.6` | Gewichtung der Vektorsuche (kNN) im Hybrid-Score |
+| `HYBRID_K` | `10` | Anzahl zurückgegebener Kandidaten pro Suche |
+| `HYBRID_SCORE_THRESHOLD` | `0.1` | Mindest-Score; Treffer darunter werden verworfen |
+| `SESSION_LIFETIME_HOURS` | `8` | Gültigkeit einer Login-Session in Stunden |
+| `LDAP_URL` | `ldap://ldap:389` | LDAP-Server-URL |
+| `LDAP_BASE_DN` | `dc=example,dc=com` | Basis-DN des LDAP-Verzeichnisses |
+| `LDAP_USER_SEARCH_BASE` | `ou=users,dc=example,dc=com` | Suchbasis für Benutzerkonten |
+| `LDAP_BIND_DN` | _(leer)_ | Service-Account für LDAP-Suche (optional) |
+| `LDAP_BIND_PASSWORD` | _(leer)_ | Passwort des Service-Accounts (optional) |
+| `LDAP_USER_FILTER` | `(objectClass=inetOrgPerson)` | LDAP-Filter für gültige Benutzerkonten |
+| `LDAP_UID_ATTR` | `uid` | LDAP-Attribut für den Benutzernamen |
+| `LDAP_DISPLAY_NAME_ATTR` | `displayName` | LDAP-Attribut für den Anzeigenamen |
+| `LDAP_MAIL_ATTR` | `mail` | LDAP-Attribut für die E-Mail-Adresse |
+| `LDAP_ADMIN_GROUP_DN` | _(leer)_ | DN der Admin-Gruppe (optional) |
+| `POSTGRES_PASSWORD` | `changeme` | Passwort für die PostgreSQL-Datenbank |
+| `REDIS_PASSWORD` | _(leer)_ | Redis-Passwort (leer = kein Passwort; in Produktion setzen) |
+| `SECURE_COOKIES` | `false` | Cookies auf HTTPS-only setzen (nur mit TLS-Termination) |
+
+---
+
+### Modelle
+
+#### Embedding-Modell (`EMBEDDINGS_MODEL`, `EMBEDDING_SIZE`, `TOKENIZER_MODEL_ID`)
+
+Das Embedding-Modell wandelt Text in numerische Vektoren um. Diese Vektoren repräsentieren die *Bedeutung* des Textes und ermöglichen die semantische Suche.
+
+**`bge-m3`** (Standard) ist ein multilinguales Modell von BAAI, das besonders gut für deutschsprachige Dokumente geeignet ist. Es versteht Semantik über Sprachgrenzen hinweg und erzeugt 1024-dimensionale Vektoren.
+
+- `EMBEDDING_SIZE=1024` muss zur tatsächlichen Ausgabedimension des Modells passen. Bei `bge-m3` ist das immer 1024. **Kritisch**: Ein falscher Wert erzeugt einen OpenSearch-Index mit der falschen Dimension — alle gespeicherten Vektoren sind dann unbrauchbar. Bei einem Modellwechsel muss der Index gelöscht und neu aufgebaut werden.
+- `TOKENIZER_MODEL_ID=BAAI/bge-m3` ist der zugehörige HuggingFace-Tokenizer, der beim ersten Start (~1 MB) heruntergeladen und dann lokal gecacht wird. Er wird für die token-basierte Chunk-Einteilung benötigt und muss immer zum Embedding-Modell passen.
+
+#### Sprachmodell (`LLM_MODEL`, `EMBEDDER_TYPE`, `LLM_TYPE`)
+
+Das Sprachmodell (LLM) formuliert die eigentliche Chat-Antwort auf Basis der gefundenen Dokumentenabschnitte.
+
+**`qwen3.5:35b`** (Standard) verwendet eine Mixture-of-Experts-Architektur: Obwohl das Modell 35 Milliarden Parameter hat, sind bei jedem Verarbeitungsschritt nur etwa 3 Milliarden aktiv. Das macht es deutlich schneller und speichersparender als ein klassisches 35B-Modell, bei vergleichbarer Qualität.
+
+Als Alternative steht `qwen3.5:122b` zur Verfügung (10B aktive Parameter) — bessere Qualität, aber deutlich höherer RAM-Bedarf (ca. 70 GB).
+
+---
+
+### Dokument-Verarbeitung (Chunking)
+
+Beim Einlesen eines PDFs wird der Text in kleinere Abschnitte (*Chunks*) aufgeteilt, da ein LLM nicht das gesamte Dokument auf einmal verarbeiten kann.
+
+```
+PDF-Seite (z.B. 2000 Token)
+    │
+    ▼  split_into_chunks()
+┌───────────────────┐  ┌───────────────────┐  ┌───────────────────┐
+│  Chunk 1 (400 T)  │  │  Chunk 2 (400 T)  │  │  Chunk 3 (400 T)  │
+└───────────────────┘  └───────────────────┘  └───────────────────┘
+        ↑ 60T Overlap ↓         ↑ 60T Overlap ↓
+    │
+    ▼  add_neighbouring_content() + Embedding
+┌──────────────────────────────────────────────────────────────────┐
+│ [Prev Context ~100T] [Current Content 400T] [Next Context ~100T] │  → max. 600T → Embedding-Vektor
+└──────────────────────────────────────────────────────────────────┘
+```
+
+#### `CHUNK_SIZE` (Standard: 400 Tokens)
+
+Bestimmt die Größe jedes Abschnitts in **Tokens** (keine Zeichen). Tokens entsprechen ungefähr ¾ eines deutschen Wortes — 400 Token entsprechen ca. 250–300 Wörtern oder etwa ½ Seite Text.
+
+- **Kleiner (z.B. 200–300)**: Jeder Chunk enthält weniger Text → präzisere Treffergenauigkeit bei Detailfragen, aber fehlender Zusammenhang für komplexere Fragen.
+- **Größer (z.B. 600–800)**: Mehr Kontext pro Chunk → besser für Zusammenfassungen, aber die Vektoren werden unschärfer (ein Vektor repräsentiert mehr unterschiedliche Themen).
+- **Achtung**: Eine Änderung erfordert den vollständigen Neu-Aufbau aller Indizes, da die alten Chunks anders geschnitten sind.
+
+#### `CHUNK_OVERLAP` (Standard: 60 Tokens)
+
+Bestimmt, wie viele Tokens am Ende eines Chunks auch am Anfang des nächsten Chunks wiederholt werden. Verhindert, dass ein Satz, der genau an einer Chunk-Grenze liegt, in der Suche nicht gefunden wird.
+
+- **Zu klein (< 20)**: Sätze an Grenzen fallen durch das Raster.
+- **Zu groß (> 100)**: Chunks enthalten viel redundanten Inhalt → mehr gespeicherte Daten, langsamere Suche.
+
+#### `EMBEDDING_MAX_TOKENS` (Standard: 600 Tokens)
+
+Jeder gespeicherte Chunk besteht aus dem eigentlichen Inhalt (bis zu 400 Tokens) plus Kontext aus den Nachbar-Chunks (je ~100 Tokens). `EMBEDDING_MAX_TOKENS=600` setzt die harte Obergrenze: Falls der kombinierte Text länger ist, wird er auf 600 Tokens abgeschnitten, bevor der Embedding-Vektor berechnet wird.
+
+`bge-m3` unterstützt bis zu 8192 Tokens, also gibt es hier keinen technischen Engpass — der Wert kann bei Bedarf erhöht werden, wenn der Kontext vergrößert wird.
+
+#### `OPENSEARCH_ANALYZER` (Standard: `german`)
+
+Steuert die Textverarbeitung für die BM25-Volltextsuche:
+
+- **`german`**: Entfernt deutsche Stoppwörter (*der, die, das, und, …*), führt Snowball-Stemming durch (*"Dokumente" → "Dokument"*) und normalisiert Umlaute (*"ü" → "u"*). Optimal für rein deutschen Text.
+- **`standard`**: Keine Sprachspezifika — geeignet für gemischten oder englischen Text.
+- **`english`**: Englische Stoppwörter und Stemming.
+
+**Achtung**: Eine Änderung erfordert den vollständigen Neu-Aufbau aller Indizes, da der Analyzer beim Indexieren und beim Suchen übereinstimmen muss.
+
+---
+
+### Hybrid Search (Retrieval)
+
+Wenn ein Benutzer eine Frage stellt, wird nach passenden Dokument-Chunks gesucht, bevor das LLM antwortet. Die Suche kombiniert zwei komplementäre Verfahren:
+
+- **BM25** (Volltextsuche): Findet Chunks, die exakt dieselben Wörter wie die Frage enthalten. Besonders gut bei Eigennamen, Akronymen und technischen Begriffen.
+- **kNN** (Vektorsuche): Findet Chunks mit ähnlicher *Bedeutung*, auch wenn andere Wörter verwendet werden. Gut bei Synonymen und umgangssprachlichen Formulierungen.
+
+OpenSearch normalisiert beide Scores auf [0, 1] und berechnet dann einen gewichteten Mittelwert.
+
+#### `HYBRID_BM25_WEIGHT` / `HYBRID_KNN_WEIGHT` (Standard: 0.4 / 0.6)
+
+Die Gewichte müssen sich zu 1.0 addieren. Empfehlungen:
+
+| Dokumententyp | BM25 | kNN | Begründung |
+|---|---|---|---|
+| Technische Handbücher, Gesetze (viele Fachbegriffe) | 0.5 | 0.5 | Exakte Begriffe sind kritisch |
+| Allgemeine Unternehmenstexte (Standard) | 0.4 | 0.6 | Gute Balance |
+| Freitext, Berichte (variierender Wortschatz) | 0.3 | 0.7 | Semantik schlägt Lexik |
+
+#### `HYBRID_K` (Standard: 10)
+
+Wie viele Kandidaten OpenSearch pro Suche zurückgibt (vor Deduplizierung und Score-Filterung). Eine höhere Zahl erhöht die Chance, relevante Chunks zu finden, vergrößert aber auch den Kontext, der an das LLM übergeben wird, und damit den RAM- und Zeitbedarf.
+
+#### `HYBRID_SCORE_THRESHOLD` (Standard: 0.1)
+
+Chunks mit einem kombinierten Score unter diesem Schwellwert werden **vor der LLM-Anfrage** verworfen. Verhindert, dass thematisch unpassende Abschnitte die Antwort verfälschen.
+
+- **`0.0`**: Deaktiviert — alle K Ergebnisse werden verwendet, auch schwache.
+- **`0.05–0.1`**: Konservativ — filtert nur offensichtlich irrelevante Treffer.
+- **`0.15–0.2`**: Strenger — für homogene Dokumentensammlungen, wo schwache Treffer mit hoher Wahrscheinlichkeit thematisch falsch sind.
+
+Wenn das LLM häufig "Die gesuchte Information wurde nicht gefunden." antwortet, obwohl passende Dokumente vorhanden sind, den Schwellwert senken. Wenn irrelevante Informationen in die Antwort einfließen, den Schwellwert erhöhen.
+
+---
+
+### LLM-Parameter
+
+#### `LLM_TEMPERATURE` (Standard: 0.0)
+
+Steuert, wie kreativ oder deterministisch das LLM antwortet:
+
+- **`0.0`**: Vollständig deterministisch — bei gleicher Frage immer die gleiche Antwort. Ideal für faktische Dokumentensuche, wo Präzision wichtiger ist als Variabilität.
+- **`0.1–0.5`**: Leichte Variabilität — die Antwort kann unterschiedlich formuliert sein, bleibt aber inhaltlich konsistent.
+- **`> 0.7`**: Kreativ, aber unzuverlässig für Fakten — nicht empfohlen für diesen Anwendungsfall.
+
+#### `LLM_TIMEOUT_SECONDS` (Standard: 240)
+
+Wie lange die App auf eine vollständige LLM-Antwort wartet, bevor die Verbindung abbricht. Große Modelle oder lange Antworten brauchen mehr Zeit.
+
+**Kopplung mit dem Frontend**: Der Browser-seitige Timeout (`_STREAM_TIMEOUT_MS` in `chat.js`) ist auf 270.000 ms (270 Sekunden) gesetzt — immer 30 Sekunden über dem Server-Timeout. Diese beiden Werte müssen zusammen angepasst werden, sonst bricht entweder der Browser zu früh ab, oder der Server wartet auf eine nie ankommende Antwort.
+
+#### `LLM_NUM_CTX` (Standard: 16384)
+
+Die Größe des Kontextfensters in Tokens, das Ollama für das LLM reserviert. Das Kontextfenster enthält den gesamten Prompt: Systemanweisung + Gesprächsverlauf + Dokumenten-Chunks + Frage.
+
+Grobe Schätzung für die Standardkonfiguration:
+- 10 Chunks × 600 Token = 6.000 Token
+- Systemprompt + Frage = ~500 Token
+- Gesprächsverlauf (3 Einträge) = ~1.000 Token
+- **Gesamt ≈ 7.500 Token** → 16.384 bietet ausreichend Puffer
+
+Ein zu kleines Kontextfenster führt dazu, dass Ollama Chunks stillschweigend abschneidet, was die Antwortqualität verschlechtert. Ein zu großes Fenster belegt mehr GPU-VRAM.
+
+---
+
+### LDAP-Konfiguration
+
+Die App authentifiziert Benutzer über LDAP (z.B. Active Directory oder OpenLDAP). Beim Login wird ein LDAP-Bind als der Benutzer selbst durchgeführt — das Passwort verlässt niemals die App.
+
+| Variable | Bedeutung |
+|---|---|
+| `LDAP_URL` | URL des LDAP-Servers, z.B. `ldap://192.168.1.10:389` oder `ldaps://...` für TLS |
+| `LDAP_BASE_DN` | Wurzel des Verzeichnisbaums, z.B. `dc=firma,dc=de` |
+| `LDAP_USER_SEARCH_BASE` | Wo nach Benutzerkonten gesucht wird, z.B. `ou=Mitarbeiter,dc=firma,dc=de` |
+| `LDAP_BIND_DN` | Optional: Ein Service-Account-DN, wenn anonymes Suchen nicht erlaubt ist |
+| `LDAP_BIND_PASSWORD` | Passwort des Service-Accounts |
+| `LDAP_USER_FILTER` | LDAP-Filter, der gültige Benutzerkonten identifiziert. Standard: `(objectClass=inetOrgPerson)`. Für Active Directory: `(objectClass=user)` |
+| `LDAP_UID_ATTR` | LDAP-Attribut, das den Benutzernamen enthält. Standard: `uid`. AD: `sAMAccountName` |
+| `LDAP_DISPLAY_NAME_ATTR` | Attribut für den Anzeigenamen. Standard: `displayName` |
+| `LDAP_MAIL_ATTR` | Attribut für die E-Mail-Adresse. Standard: `mail` |
+| `LDAP_ADMIN_GROUP_DN` | Optional: DN einer LDAP-Gruppe, deren Mitglieder automatisch globale Admins werden, z.B. `cn=rag-admins,ou=groups,dc=firma,dc=de` |
+
+Die App prüft beim Login zusätzlich:
+- `pwdAccountLockedTime`: Ist das Konto gesperrt?
+- `shadowExpire`: Ist das Konto abgelaufen?
+
+Ist kein LDAP-Server konfiguriert oder erreichbar, kann ein lokaler Bootstrap-Admin über die CLI angelegt werden (bcrypt-Hash in PostgreSQL).
+
+> **Kritisch**: `EMBEDDING_SIZE` muss exakt zur Dimension des gewählten `EMBEDDINGS_MODEL` passen. Bei Änderung müssen alle OpenSearch-Indizes gelöscht und neu aufgebaut werden.
+
+## Services
+
+| Service | Port | Beschreibung |
+|---|---|---|
+| App (FastAPI) | 8081 | Web-UI + REST-API |
+| OpenSearch | 9200 | Vektor-Datenbank |
+| PostgreSQL | _(intern)_ | Benutzer, Instanzen, Sessions, Chat-History |
+| Redis | 6379 | Dokument-Metadaten (Key: `doc:{slug}:{sha256}`) |
+| Ollama | 11434 | Auf dem Host, nicht im Container |
+
+## Häufige Aufgaben
+
+### Ersten Admin anlegen
 
 ```bash
-# Single file
-python -m app.ingest document.pdf
-
-# Multiple files
-python -m app.ingest doc1.pdf doc2.pdf doc3.pdf
-
-# All PDFs in a directory
-python -m app.ingest /path/to/pdfs/
-
-# All PDFs in a directory and all subdirectories
-python -m app.ingest /path/to/pdfs/ --recursive
-
-# Mix of files and directories
-python -m app.ingest /pdfs/ single.pdf /another/folder/ --recursive
+docker exec -it app python -m app.cli.admin create-admin <username> <passwort>
 ```
 
-The CLI shows a live progress bar per file and prints a summary at the end:
+### Bulk-Ingestion via CLI
 
-```
-Found 3 PDF file(s) to ingest.
+```bash
+# Einzelne Datei
+python -m app.ingest --instance <slug> dokument.pdf
 
-[1/3] report.pdf    [██████████████████████████████] 100.0%  ✓
-[2/3] handbook.pdf  [██████████████████████████████] 100.0%  ✓
-[3/3] broken.pdf    ✗ Error processing document: ...
-
-────────────────────────────────────────
-Done: 2 succeeded, 1 failed.
+# Verzeichnis (rekursiv)
+python -m app.ingest --instance <slug> /pfad/zu/pdfs/ --recursive
 ```
 
-Already-indexed files are detected automatically via their file hash and skipped.
+### OpenSearch-Index zurücksetzen
 
-## Development
-
-### Project Structure
-
-```
-langchain-opensearch-rag/
-├── infra/                  # Infrastructure configuration
-│   ├── docker-compose.yml  # Docker Compose configuration
-│   ├── redis/              # Redis configuration
-│   └── scripts/            # Helper scripts
-├── src/                    # Source code
-│   └── app/                # Application code
-│       ├── loader/         # Document loading and processing
-│       ├── ui/             # Gradio UI components
-│       └── main.py         # Application entry point
-└── README.md               # This file
+```bash
+# Index löschen (erforderlich nach Wechsel des Embedding-Modells oder bei geänderter Chunk-Größe)
+curl -X DELETE http://localhost:9200/documents_<slug>
+# App neu starten — Index wird automatisch neu angelegt
+docker compose -f infra/docker-compose.yml restart app
+# Danach Dokumente neu einlesen:
+python -m app.ingest --instance <slug> /pfad/zu/pdfs/ --recursive
 ```
 
-### Local Development
-
-To develop locally:
-
-1. Create a Python virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Run the application:
-   ```bash
-   python src/app/main.py
-   ```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Redis Connection Issues**: Ensure Redis is running and accessible from the app container
-2. **Ollama Connection Issues**: Verify Ollama is running and the OLLAMA_HOST is correctly set
-3. **OpenSearch Connection Issues**: Check OpenSearch logs and ensure it's healthy
+Redis-Metadaten (Duplikat-Erkennung) separat zurücksetzen:
+```bash
+docker exec -it $(docker ps -qf name=redis) redis-cli FLUSHDB
+```
 
 ### Logs
 
-To view logs:
-
 ```bash
-# All services
-docker-compose -f infra/docker-compose.yml logs -f
-
-# Specific service
-docker-compose -f infra/docker-compose.yml logs -f app
+docker compose -f infra/docker-compose.yml logs -f app
+docker compose -f infra/docker-compose.yml logs -f opensearch
 ```
 
-## License
+## Lokale Entwicklung (ohne Docker)
 
-[MIT License](LICENSE)
+```bash
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+# infra/.env muss existieren
+uvicorn app.app_fastapi:app --reload --port 8081
+```
+
+Voraussetzung: OpenSearch, Redis und PostgreSQL laufen (z. B. per `docker compose up opensearch redis postgres -d`).
+
+## Architektur
+
+```
+Browser
+  │
+  ▼
+FastAPI (app_fastapi.py)
+  ├── AuthMiddleware      — Session-Token aus Cookie; Redirect → /login
+  ├── /login /logout      — LDAP-Bind oder lokaler bcrypt-Check
+  ├── /chat /chat/stream  — SSE-Streaming: sources → tokens → done
+  ├── /documents /upload  — SSE-Fortschritt, chunked Datei-Lesen
+  └── /admin              — Instanzen, Gruppen, Benutzer (paginiert)
+         │
+         ├── PostgreSQL   — User, Instance, Group, Session, ChatHistory
+         ├── Redis         — DocumentMetadata als JSON (doc:{slug}:{sha256})
+         └── OpenSearch    — documents_{slug}: knn_vector + text (BM25)
+                                └── Hybrid Pipeline: min_max + arithmetic_mean
+```

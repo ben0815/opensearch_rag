@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Chat — {{ active_instance.instance.name if active_instance else "Keine Instanz" }}{% endblock %}
+{% block content %}
+<div class="row mb-2">
+  <div class="col-md-8 d-flex align-items-center gap-3">
+    {% if instances|length > 1 %}
+    <form method="get" action="/chat" class="d-flex align-items-center gap-2">
+      <label class="fw-bold text-nowrap">Instanz:</label>
+      <select name="instance_id" class="form-select form-select-sm w-auto">
+        {% for entry in instances %}
+        <option value="{{ entry.instance.id }}"
+          {% if active_instance and entry.instance.id == active_instance.instance.id %}selected{% endif %}>
+          {{ entry.instance.name }}
+        </option>
+        {% endfor %}
+      </select>
+    </form>
+    {% elif active_instance %}
+    <span class="fw-bold">{{ active_instance.instance.name }}</span>
+    {% endif %}
+    <a href="/chat/history" class="btn btn-sm btn-outline-secondary">Verlauf</a>
+    {% if active_instance %}
+    <button type="button" class="btn btn-sm btn-outline-secondary" id="new-chat-btn">Neuer Chat</button>
+    {% endif %}
+  </div>
+</div>
+
+{% if not active_instance %}
+<div class="alert alert-warning">{{ error | safe }}</div>
+{% else %}
+<div class="row">
+  <div class="col-md-8">
+    <div id="chat-box" class="border rounded p-3 mb-3" style="min-height:400px; max-height:60vh; overflow-y:auto;"></div>
+    <form id="chat-form">
+      <input type="hidden" name="instance_id" value="{{ active_instance.instance.id }}">
+      <div class="input-group">
+        <textarea name="question" id="question-input" class="form-control" rows="2"
+          placeholder="Frage eingeben..." required></textarea>
+        <button type="submit" class="btn btn-primary" id="send-btn"
+          title="Strg+Enter zum Senden">Senden</button>
+      </div>
+      <div class="form-text text-end text-muted">Strg+Enter zum Senden</div>
+    </form>
+  </div>
+  <div class="col-md-4">
+    <div class="card">
+      <div class="card-header">Quellen</div>
+      <div id="sources-box" class="card-body p-2 small" style="max-height:500px; overflow-y:auto;">
+        <span class="text-muted">Hier erscheinen die Quell-Abschnitte nach der Antwort.</span>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/static/js/chat.js?v={{ js_version }}"></script>
+{% endif %}
+{% endblock %}
