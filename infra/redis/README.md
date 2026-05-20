@@ -55,7 +55,9 @@ docker compose exec redis redis-cli SLOWLOG GET 10
 
 ## Metadaten manuell löschen
 
-Beim Löschen einer Instanz werden die Redis-Keys derzeit **nicht automatisch** bereinigt (bekanntes Problem). Manuell:
+Beim Löschen einer Instanz über die Admin-UI werden alle zugehörigen Redis-Keys **automatisch** bereinigt (`delete_instance()` in `instance_service.py`).
+
+Manuelles Eingreifen ist nur in Ausnahmefällen nötig (z.B. nach direktem Löschen des OpenSearch-Index):
 
 ```bash
 # Alle Keys einer Instanz löschen
