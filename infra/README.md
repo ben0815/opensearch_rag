@@ -41,6 +41,24 @@ Speichert Dokument-Metadaten als JSON-Strings.
 - **Config**: `redis/redis.conf` (maxmemory 512 MB, allkeys-lru, RDB-Persistenz)
 - **Volume**: `redis_data` (persistent)
 
+### caddy _(Profil: `caddy`)_
+Reverse-Proxy mit automatischem TLS — nur für den Produktionseinsatz.
+
+- **Image**: `caddy:2-alpine`
+- **Ports**: 80 (HTTP / ACME-Challenge), 443 (HTTPS)
+- **Config**: `caddy/Caddyfile` (Domain via `{$DOMAIN}` konfigurierbar)
+- **Volumes**: `caddy_data` (Zertifikate), `caddy_config` (Caddy-interne Konfiguration)
+- **Aktivierung**: `docker compose --profile caddy up -d`
+
+Vor dem ersten Start mit Caddy in `infra/.env` setzen:
+```bash
+APP_BIND_HOST=127.0.0.1   # App-Port nicht mehr direkt von außen erreichbar
+SECURE_COOKIES=true        # Session-Cookies auf HTTPS-only
+DOMAIN=rag.example.com     # Muss auf den Host zeigen (für Let's Encrypt)
+```
+
+Caddy kommuniziert mit der App intern über `app:8081` im Docker-Netzwerk.
+
 ### postgres
 Relationale Datenbank für Anwendungsdaten.
 
@@ -67,6 +85,8 @@ cp infra/.env.example infra/.env
 ## Netzwerk
 
 Alle Services sind im Bridge-Netzwerk `opensearch-network` und erreichbar unter ihrem Service-Namen (`opensearch`, `redis`, `postgres`, `app`). Die App erhält zusätzlich `host.docker.internal` → Host-Gateway für Ollama-Zugriff.
+
+Der App-Port auf dem Host wird über `APP_BIND_HOST` gesteuert (Standard: `0.0.0.0` — alle Interfaces, geeignet für Entwicklung auf einem entfernten Rechner). Im Produktionsbetrieb mit Caddy auf `127.0.0.1` setzen.
 
 ## Debugging
 
@@ -95,3 +115,5 @@ docker compose exec postgres psql -U raguser -d ragdb
 | `opensearch-data` | OpenSearch-Shards und Indizes |
 | `redis_data` | Redis-RDB-Snapshot (Dokument-Metadaten) |
 | `postgres_data` | PostgreSQL-Datenbankdateien |
+| `caddy_data` | TLS-Zertifikate (Let's Encrypt) |
+| `caddy_config` | Caddy-interne Laufzeitkonfiguration |

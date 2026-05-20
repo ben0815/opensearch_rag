@@ -78,6 +78,7 @@ Alle Variablen werden in `infra/.env` gesetzt (Vorlage: `infra/.env.example`). I
 | `POSTGRES_PASSWORD` | `changeme` | Passwort für die PostgreSQL-Datenbank |
 | `REDIS_PASSWORD` | _(leer)_ | Redis-Passwort (leer = kein Passwort; in Produktion setzen) |
 | `SECURE_COOKIES` | `false` | Cookies auf HTTPS-only setzen (nur mit TLS-Termination) |
+| `APP_BIND_HOST` | `0.0.0.0` | Bind-Adresse des App-Ports auf dem Host. `0.0.0.0` = von allen Rechnern im Netz erreichbar (Entwicklung). In Produktion mit Caddy auf `127.0.0.1` setzen. |
 
 ---
 
@@ -92,7 +93,7 @@ Das Embedding-Modell wandelt Text in numerische Vektoren um. Diese Vektoren repr
 - `EMBEDDING_SIZE=1024` muss zur tatsächlichen Ausgabedimension des Modells passen. Bei `bge-m3` ist das immer 1024. **Kritisch**: Ein falscher Wert erzeugt einen OpenSearch-Index mit der falschen Dimension — alle gespeicherten Vektoren sind dann unbrauchbar. Bei einem Modellwechsel muss der Index gelöscht und neu aufgebaut werden.
 - `TOKENIZER_MODEL_ID=BAAI/bge-m3` ist der zugehörige HuggingFace-Tokenizer, der beim ersten Start (~1 MB) heruntergeladen und dann lokal gecacht wird. Er wird für die token-basierte Chunk-Einteilung benötigt und muss immer zum Embedding-Modell passen.
 
-#### Sprachmodell (`LLM_MODEL`, `EMBEDDER_TYPE`, `LLM_TYPE`)
+#### Sprachmodell (`LLM_MODEL`)
 
 Das Sprachmodell (LLM) formuliert die eigentliche Chat-Antwort auf Basis der gefundenen Dokumentenabschnitte.
 
@@ -255,6 +256,25 @@ Ist kein LDAP-Server konfiguriert oder erreichbar, kann ein lokaler Bootstrap-Ad
 | PostgreSQL | _(intern)_ | Benutzer, Instanzen, Sessions, Chat-History |
 | Redis | 6379 | Dokument-Metadaten (Key: `doc:{slug}:{sha256}`) |
 | Ollama | 11434 | Auf dem Host, nicht im Container |
+| Caddy | 80 / 443 | Reverse-Proxy mit automatischem TLS (nur Produktion, Profile `caddy`) |
+
+## Produktion mit HTTPS (Caddy)
+
+In der Entwicklung ist die App direkt unter Port 8081 erreichbar. Für den Produktionseinsatz mit HTTPS steht ein Caddy-Reverse-Proxy vorbereitet, der über ein Docker-Compose-Profile aktiviert wird.
+
+```bash
+# infra/.env anpassen:
+#   APP_BIND_HOST=127.0.0.1   # App nicht mehr direkt von außen erreichbar
+#   SECURE_COOKIES=true        # Session-Cookies auf HTTPS-only setzen
+#   DOMAIN=rag.example.com     # Wird im Caddyfile als {$DOMAIN} referenziert
+
+# Stack mit Caddy starten:
+docker compose --profile caddy up -d
+```
+
+Caddy bezieht automatisch ein TLS-Zertifikat via Let's Encrypt (Port 80 für ACME-Challenge, 443 für HTTPS). Die App ist intern über das Docker-Netzwerk erreichbar (`app:8081`) und wird nicht mehr direkt exponiert.
+
+Das Caddyfile liegt unter `infra/caddy/Caddyfile` und kann für erweiterte Konfigurationen (eigene Zertifikate, Header, Rate-Limiting) angepasst werden.
 
 ## Datenbankmigrationen (Alembic)
 

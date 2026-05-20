@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Any, Generator
+from typing import TYPE_CHECKING, Generator
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -9,7 +9,6 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_ollama import OllamaLLM
 
 if TYPE_CHECKING:
-    from langchain_aws import BedrockLLM
     from langchain_core.documents import Document
     from app.loader import LoaderConfig, VectorStore
 
@@ -17,7 +16,7 @@ from app.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
-_llm_cache: dict[str, OllamaLLM | Any] = {}
+_llm_cache: dict[str, OllamaLLM] = {}
 _llm_cache_lock = threading.Lock()
 
 _PROMPT_TEMPLATE = PromptTemplate(
@@ -55,10 +54,9 @@ def clear_llm_cache() -> None:
         _llm_cache.clear()
 
 
-def get_llm(config: LoaderConfig) -> BedrockLLM | OllamaLLM:
-    """Get the LLM based on configuration (cached per model+params key)."""
-    llm_type = config.llm_type
-    cache_key = f'{llm_type}:{config.llm_model}:{config.llm_temperature}:{config.llm_num_ctx}:{config.llm_timeout_seconds}'
+def get_llm(config: LoaderConfig) -> OllamaLLM:
+    """Get the Ollama LLM (cached per model+params key)."""
+    cache_key = f'{config.llm_model}:{config.llm_temperature}:{config.llm_num_ctx}:{config.llm_timeout_seconds}'
 
     if cache_key in _llm_cache:
         return _llm_cache[cache_key]
@@ -66,25 +64,13 @@ def get_llm(config: LoaderConfig) -> BedrockLLM | OllamaLLM:
     with _llm_cache_lock:
         if cache_key in _llm_cache:
             return _llm_cache[cache_key]
-        if llm_type.lower() == 'bedrock':
-            from langchain_aws import BedrockLLM
-            llm = BedrockLLM(
-                credentials_profile_name='default',
-                region_name=config.region_name,
-                endpoint_url=config.endpoint_url,
-                model_id=config.model_id,
-                model_kwargs={'temperature': 0.0, 'max_tokens_to_sample': 4096},
-            )
-        elif llm_type.lower() == 'ollama':
-            llm = OllamaLLM(
-                base_url=config.ollama_host,
-                model=config.llm_model,
-                temperature=config.llm_temperature,
-                timeout=config.llm_timeout_seconds,
-                num_ctx=config.llm_num_ctx,
-            )
-        else:
-            raise ValueError(f'Unsupported LLM type: {llm_type}')
+        llm = OllamaLLM(
+            base_url=config.ollama_host,
+            model=config.llm_model,
+            temperature=config.llm_temperature,
+            timeout=config.llm_timeout_seconds,
+            num_ctx=config.llm_num_ctx,
+        )
         _llm_cache[cache_key] = llm
 
     return _llm_cache[cache_key]

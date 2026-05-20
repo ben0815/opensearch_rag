@@ -24,7 +24,6 @@ setup(
         "langchain-core>=0.3.0",
         "langchain-text-splitters>=0.3.0",
         "langchain-ollama>=0.3.0",
-        "langchain-aws>=0.2.0",
         "opensearch-py>=2.3.1",
         "python-dotenv>=1.0.0",
         "pydantic>=2.0.0",

@@ -82,14 +82,12 @@ services:
         - PIP_NO_CACHE_DIR=1
     container_name: app
     ports:
-      - "8081:8081"
+      - "${APP_BIND_HOST:-0.0.0.0}:8081:8081"
     environment:
       # Service connections
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-bge-m3}
       - LLM_MODEL=${LLM_MODEL:-qwen3.5:35b}
-      - EMBEDDER_TYPE=${EMBEDDER_TYPE:-ollama}
-      - LLM_TYPE=${LLM_TYPE:-ollama}
       - OPENSEARCH_URL=${OPENSEARCH_URL:-http://opensearch:9200}
       - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME:-admin}
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-admin}
@@ -98,7 +96,6 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       # Processing settings
-      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
       - EMBEDDING_SIZE=${EMBEDDING_SIZE:-1024}
       - CHUNK_SIZE=${CHUNK_SIZE:-400}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-60}
@@ -188,6 +185,24 @@ services:
           - redis
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2-alpine
+    profiles: [caddy]
+    container_name: caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - opensearch-network
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     container_name: postgres
@@ -213,6 +228,10 @@ volumes:
   opensearch-data:
     driver: local
   postgres_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
     driver: local
 
 networks:

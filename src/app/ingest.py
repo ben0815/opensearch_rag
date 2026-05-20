@@ -10,8 +10,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# In Docker: ENV_FILE points to /app/secrets/.env (override values only).
-# Locally: fall back to infra/.env relative to the project root.
+# Im Container sind alle Vars bereits über docker-compose gesetzt — load_dotenv ist dann ein No-op.
+# Lokal: liest infra/.env relativ zum Projekt-Root.
 _env_file = os.getenv('ENV_FILE') or str(Path(__file__).resolve().parents[2] / 'infra' / '.env')
 load_dotenv(_env_file, override=False)
 
@@ -50,13 +50,11 @@ async def ingest(files: list[Path], processor: DocumentProcessor) -> tuple[int, 
     for idx, file in enumerate(files, start=1):
         prefix = f'[{idx}/{total}] {file.name}'
         try:
-            last_progress = 0.0
             async for progress in processor.load_documents(file):
                 bar_len = 30
                 filled = int(bar_len * progress / 100)
                 bar = '█' * filled + '░' * (bar_len - filled)
                 print(f'\r{prefix}  [{bar}] {progress:5.1f}%', end='', flush=True)
-                last_progress = progress
             print(f'\r{prefix}  [{"█" * 30}] 100.0%  ✓')
             success += 1
         except Exception as e:
@@ -78,7 +76,6 @@ async def main(args: argparse.Namespace) -> int:
     print(f'Found {len(files)} PDF file(s) to ingest into instance "{args.instance}".\n')
 
     config = LoaderConfig()
-    config.validate()
     vector_store = VectorStore.for_instance(config, args.instance)
     redis_service = RedisMetadataService.from_config(config, args.instance)
     processor = DocumentProcessor(

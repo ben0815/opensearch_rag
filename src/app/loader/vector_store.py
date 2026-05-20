@@ -38,7 +38,6 @@ class VectorStore:
         self.config = config
         self._instance_slug = instance_slug
         self._index_name = f"documents_{instance_slug}"
-        self.embedder_type = config.embedder_type
         self.embeddings = self.get_embeddings()
         self._index_mapping = self._get_index_mapping()
         self._raw_client: OpenSearch | None = None
@@ -64,21 +63,13 @@ class VectorStore:
             return _store_cache[instance_slug]
 
     def get_embeddings(self):
-        if self.embedder_type == 'bedrock':
-            from langchain_aws import BedrockEmbeddings
-            return BedrockEmbeddings(
-                model_id=self.config.bedrock_model_id,
+        try:
+            return OllamaEmbeddings(
+                base_url=self.config.ollama_host,
+                model=self.config.embeddings_model,
             )
-        elif self.embedder_type == 'ollama':
-            try:
-                return OllamaEmbeddings(
-                    base_url=self.config.ollama_host,
-                    model=self.config.embeddings_model,
-                )
-            except Exception as e:
-                raise ValueError(f'Error initializing Ollama embeddings: {e}') from e
-        else:
-            raise ValueError(f'Unsupported embedder type: {self.embedder_type}')
+        except Exception as e:
+            raise ValueError(f'Error initializing Ollama embeddings: {e}') from e
 
     def _get_raw_client(self) -> OpenSearch:
         """Return a cached raw OpenSearch client for direct API access."""
