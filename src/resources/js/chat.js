@@ -35,8 +35,7 @@ let _currentAbortController = null;
 let _streamTimeout = null;
 // Modul-Variable für _startElapsedTimer — zeigt immer auf den aktiven Indikator-Span.
 let _thinkingIndicatorEl = null;
-// Muss >= LLM_TIMEOUT_SECONDS (Server-Default 240s) + Puffer für Fehler-Event-Übertragung sein
-const _STREAM_TIMEOUT_MS = 270000;
+const _STREAM_TIMEOUT_MS = window._LLM_STREAM_TIMEOUT_MS || 270000;
 
 function _startElapsedTimer() {
   _elapsedSeconds = 0;

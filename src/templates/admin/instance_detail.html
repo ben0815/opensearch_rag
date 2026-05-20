@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Instanz: {{ instance.name }}{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-3">
+  <h5 class="mb-0">Instanz: {{ instance.name }}</h5>
+  <div class="ms-auto d-flex gap-2">
+    <a href="/admin/instances" class="btn btn-outline-secondary btn-sm">← Zurück</a>
+    <a href="/documents?instance_id={{ instance.id }}" class="btn btn-outline-secondary btn-sm">Dokumente</a>
+  </div>
+</div>
+
+{% if error == "rebuild_ok" %}
+<div class="alert alert-success alert-dismissible">Redis-Metadaten wurden erfolgreich rekonstruiert.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% elif error == "rebuild_failed" %}
+<div class="alert alert-danger alert-dismissible">Rekonstruktion fehlgeschlagen. Bitte Logs prüfen.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Bearbeiten</div>
+      <div class="card-body">
+        <form method="post" action="/admin/instances/{{ instance.id }}/edit">
+          <div class="mb-3">
+            <label class="form-label">Name</label>
+            <input type="text" name="name" value="{{ instance.name }}" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Beschreibung</label>
+            <input type="text" name="description" value="{{ instance.description or '' }}" class="form-control">
+          </div>
+          <div class="mb-3">
+            <label class="form-label text-muted">Slug (nicht änderbar)</label>
+            <input type="text" value="{{ instance.slug }}" class="form-control" disabled>
+            <div class="form-text">Der Slug bestimmt den OpenSearch-Indexnamen und kann nicht geändert werden.</div>
+          </div>
+          <button type="submit" class="btn btn-primary">Speichern</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Statistiken</div>
+      <div class="card-body">
+        {% set _analyzer_labels = {"german": "Deutsch", "english": "Englisch", "french": "Französisch", "spanish": "Spanisch", "standard": "Standard (mehrsprachig)"} %}
+        {% set _analyzer = (instance.settings or {}).get("opensearch_analyzer", "standard") %}
+        <table class="table table-sm">
+          <tbody>
+            <tr><th>Dokumente</th><td>{{ doc_count }}</td></tr>
+            <tr><th>Zugewiesene Benutzer</th><td>{{ member_count }}</td></tr>
+            <tr><th>Zugewiesene Gruppen</th><td>{{ group_count }}</td></tr>
+            <tr>
+              <th>BM25-Sprache</th>
+              <td>
+                {{ _analyzer_labels.get(_analyzer, _analyzer) }}
+                <span class="badge bg-secondary ms-1" title="Fest im OpenSearch-Index — nicht änderbar">{{ _analyzer }}</span>
+              </td>
+            </tr>
+            <tr><th>Erstellt</th><td>{{ instance.created_at.strftime('%d.%m.%Y %H:%M') if instance.created_at else "—" }}</td></tr>
+            <tr><th>Zuletzt geändert</th><td>{{ instance.updated_at.strftime('%d.%m.%Y %H:%M') if instance.updated_at else "—" }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header">Instanz-spezifische Einstellungen</div>
+      <div class="card-body">
+        <form method="post" action="/admin/instances/{{ instance.id }}/settings">
+          {% set s = instance.settings or {} %}
+          <div class="mb-2">
+            <label class="form-label small">LLM-Modell <span class="text-muted">(leer = globaler Wert)</span></label>
+            <input type="text" name="llm_model" value="{{ s.get('llm_model', '') }}" class="form-control form-control-sm" placeholder="z.B. qwen3.5:35b">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">Temperature <span class="text-muted">(leer = globaler Wert)</span></label>
+            <input type="number" name="llm_temperature" value="{{ s.get('llm_temperature', '') }}" class="form-control form-control-sm" min="0" max="2" step="0.1" placeholder="0.0 – 2.0">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">Kontext-Tokens (num_ctx) <span class="text-muted">(leer = globaler Wert)</span></label>
+            <input type="number" name="llm_num_ctx" value="{{ s.get('llm_num_ctx', '') }}" class="form-control form-control-sm" min="1024" max="131072" step="1024" placeholder="16384">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">hybrid_k — Anzahl Chunks <span class="text-muted">(leer = globaler Wert)</span></label>
+            <input type="number" name="hybrid_k" value="{{ s.get('hybrid_k', '') }}" class="form-control form-control-sm" min="1" max="100" placeholder="10">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">Score-Threshold <span class="text-muted">(leer = globaler Wert)</span></label>
+            <input type="number" name="hybrid_score_threshold" value="{{ s.get('hybrid_score_threshold', '') }}" class="form-control form-control-sm" min="0" max="1" step="0.01" placeholder="0.1">
+          </div>
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary btn-sm">Instanz-Einstellungen speichern</button>
+            <button type="submit" name="reset" value="1" class="btn btn-outline-secondary btn-sm"
+              data-confirm="Alle Instanz-spezifischen Einstellungen zurücksetzen? Danach gelten die globalen Werte.">
+              Zurücksetzen
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-header text-danger">Gefahrenzone</div>
+  <div class="card-body d-flex gap-3 align-items-center">
+    <form method="post" action="/admin/instances/{{ instance.id }}/rebuild-redis">
+      <button type="submit" class="btn btn-outline-warning btn-sm"
+        data-confirm="Redis-Metadaten für '{{ instance.name }}' aus OpenSearch rekonstruieren? Voraussetzung: Phase 2d (file_hash in Chunks) muss aktiv sein.">
+        Redis-Metadaten rekonstruieren
+      </button>
+    </form>
+    <form method="post" action="/admin/instances/delete/{{ instance.id }}"
+      data-confirm="Instanz '{{ instance.name }}' ({{ instance.slug }}) und alle zugehörigen Dokumente, Chat-Verläufe und Zuweisungen unwiderruflich löschen?">
+      <button type="submit" class="btn btn-danger btn-sm">Instanz löschen</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

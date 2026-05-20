@@ -42,7 +42,9 @@ async def login(
 
     # 1. Lokaler Fallback: Bootstrap-Admin mit local_password_hash (kein LDAP nötig)
     if db_user and db_user.local_password_hash:
-        if _bcrypt.checkpw(password.encode(), db_user.local_password_hash.encode()):
+        if not getattr(db_user, "is_active", True):
+            error = "Ihr Account wurde deaktiviert. Bitte wenden Sie sich an einen Administrator."
+        elif _bcrypt.checkpw(password.encode(), db_user.local_password_hash.encode()):
             db_user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
             await db.commit()
             user = db_user
@@ -71,18 +73,23 @@ async def login(
                     display_name=ldap_data["display_name"],
                     email=ldap_data["email"],
                     is_global_admin=ldap_data["ldap_is_admin"],
+                    is_active=True,
                 )
                 db.add(db_user)
             else:
-                db_user.display_name = ldap_data["display_name"]
-                db_user.email = ldap_data["email"]
-                # Immer synchronisieren — so wird der Admin-Status auch entzogen,
-                # wenn der Nutzer aus der LDAP-Admin-Gruppe entfernt wurde.
-                db_user.is_global_admin = ldap_data["ldap_is_admin"]
-                db_user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
-            await db.commit()
-            await db.refresh(db_user)
-            user = db_user
+                if not getattr(db_user, "is_active", True):
+                    error = "Ihr Account wurde deaktiviert. Bitte wenden Sie sich an einen Administrator."
+                else:
+                    db_user.display_name = ldap_data["display_name"]
+                    db_user.email = ldap_data["email"]
+                    # Immer synchronisieren — so wird der Admin-Status auch entzogen,
+                    # wenn der Nutzer aus der LDAP-Admin-Gruppe entfernt wurde.
+                    db_user.is_global_admin = ldap_data["ldap_is_admin"]
+                    db_user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
+            if not error:
+                await db.commit()
+                await db.refresh(db_user)
+                user = db_user
 
     if error or not user:
         return templates.TemplateResponse(request, "login.html", {

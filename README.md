@@ -8,7 +8,7 @@ Multi-mandantenfähige RAG-Anwendung (Retrieval-Augmented Generation) auf Basis 
 - **Hybrid Search**: BM25 + kNN mit konfigurierbaren Gewichten, Score-Normalisierung via OpenSearch Pipeline
 - **SSE-Streaming**: LLM-Antworten und Upload-Fortschritt werden live gestreamt
 - **LDAP-Auth**: Bind als Benutzer, Account-Status-Prüfung (`pwdAccountLockedTime`, `shadowExpire`), optionaler Admin-Gruppen-Check; lokaler bcrypt-Fallback für Bootstrap-Admin
-- **Admin-UI**: Instanzen, Gruppen und Benutzer verwalten, Gruppen-Instanz-Zuweisungen, direkte Benutzer-Instanz-Zuweisungen
+- **Admin-UI**: Instanzen, Gruppen und Benutzer verwalten; globale LLM/Such-Parameter live anpassbar; System-Status-Dashboard; per-Instanz BM25-Sprachanalyzer und LLM-Parameter konfigurierbar
 - **Chat-Verlauf**: durchsuchbar, nach Instanz filterbar; letzten 3 Frage/Antwort-Paare fließen als Gesprächskontext in Folgefragen ein
 - **Rate Limiting**: Login auf 10 Versuche/Minute, Chat-Stream auf 30 Anfragen/Minute begrenzt
 
@@ -59,7 +59,7 @@ Alle Variablen werden in `infra/.env` gesetzt (Vorlage: `infra/.env.example`). I
 | `CHUNK_OVERLAP` | `60` | Überlapp zwischen Chunks in Tokens |
 | `EMBEDDING_MAX_TOKENS` | `600` | Token-Limit pro Chunk vor dem Embedding |
 | `TOKENIZER_MODEL_ID` | `BAAI/bge-m3` | HuggingFace-Tokenizer für Token-Zählung |
-| `OPENSEARCH_ANALYZER` | `german` | Sprachanalysator für BM25-Volltextsuche |
+| `OPENSEARCH_ANALYZER` | `standard` | Globaler Fallback-Analysator für BM25 — wird pro Instanz beim Anlegen überschrieben |
 | `HYBRID_BM25_WEIGHT` | `0.4` | Gewichtung der Volltextsuche (BM25) im Hybrid-Score |
 | `HYBRID_KNN_WEIGHT` | `0.6` | Gewichtung der Vektorsuche (kNN) im Hybrid-Score |
 | `HYBRID_K` | `10` | Anzahl zurückgegebener Kandidaten pro Suche |
@@ -142,15 +142,17 @@ Jeder gespeicherte Chunk besteht aus dem eigentlichen Inhalt (bis zu 400 Tokens)
 
 `bge-m3` unterstützt bis zu 8192 Tokens, also gibt es hier keinen technischen Engpass — der Wert kann bei Bedarf erhöht werden, wenn der Kontext vergrößert wird.
 
-#### `OPENSEARCH_ANALYZER` (Standard: `german`)
+#### `OPENSEARCH_ANALYZER` (Standard: `standard`)
 
-Steuert die Textverarbeitung für die BM25-Volltextsuche:
+Steuert die Textverarbeitung für die BM25-Volltextsuche. Typische Werte:
 
-- **`german`**: Entfernt deutsche Stoppwörter (*der, die, das, und, …*), führt Snowball-Stemming durch (*"Dokumente" → "Dokument"*) und normalisiert Umlaute (*"ü" → "u"*). Optimal für rein deutschen Text.
-- **`standard`**: Keine Sprachspezifika — geeignet für gemischten oder englischen Text.
-- **`english`**: Englische Stoppwörter und Stemming.
+- **`standard`**: Keine Sprachspezifika — geeignet für mehrsprachige oder gemischte Inhalte. **Empfohlener Standard.**
+- **`german`**: Entfernt deutsche Stoppwörter (*der, die, das, und, …*), führt Snowball-Stemming durch (*"Dokumente" → "Dokument"*) und normalisiert Umlaute (*"ü" → "u"*).
+- **`english`**, **`french`**, **`spanish`**, **`italian`**, **`portuguese`**, **`dutch`**, **`russian`**, **`arabic`** u.v.m. — OpenSearch unterstützt über 30 Sprach-Analyzer.
 
-**Achtung**: Eine Änderung erfordert den vollständigen Neu-Aufbau aller Indizes, da der Analyzer beim Indexieren und beim Suchen übereinstimmen muss.
+**Pro Instanz konfigurierbar**: Der Analyzer wird beim Anlegen einer Instanz in der Admin-UI ausgewählt und im Index-Mapping der Instanz fest verankert. Nach dem Anlegen kann er nicht mehr geändert werden. `OPENSEARCH_ANALYZER` in der `.env` gilt nur als Fallback, wenn keine Instanz-spezifische Einstellung vorliegt.
+
+**Achtung bei manuellen Änderungen**: Eine nachträgliche Änderung des Analyzers erfordert den vollständigen Neu-Aufbau des Indexes, da der Analyzer beim Indexieren und beim Suchen übereinstimmen muss.
 
 ---
 
@@ -203,7 +205,7 @@ Steuert, wie kreativ oder deterministisch das LLM antwortet:
 
 Wie lange die App auf eine vollständige LLM-Antwort wartet, bevor die Verbindung abbricht. Große Modelle oder lange Antworten brauchen mehr Zeit.
 
-**Kopplung mit dem Frontend**: Der Browser-seitige Timeout (`_STREAM_TIMEOUT_MS` in `chat.js`) ist auf 270.000 ms (270 Sekunden) gesetzt — immer 30 Sekunden über dem Server-Timeout. Diese beiden Werte müssen zusammen angepasst werden, sonst bricht entweder der Browser zu früh ab, oder der Server wartet auf eine nie ankommende Antwort.
+**Kopplung mit dem Frontend**: Der Browser-seitige Timeout wird automatisch aus `LLM_TIMEOUT_SECONDS + 30 s` berechnet und beim Laden der Chat-Seite als `window._LLM_STREAM_TIMEOUT_MS` injiziert. Eine manuelle Anpassung in `chat.js` ist nicht mehr nötig.
 
 #### `LLM_NUM_CTX` (Standard: 16384)
 
@@ -253,6 +255,43 @@ Ist kein LDAP-Server konfiguriert oder erreichbar, kann ein lokaler Bootstrap-Ad
 | PostgreSQL | _(intern)_ | Benutzer, Instanzen, Sessions, Chat-History |
 | Redis | 6379 | Dokument-Metadaten (Key: `doc:{slug}:{sha256}`) |
 | Ollama | 11434 | Auf dem Host, nicht im Container |
+
+## Datenbankmigrationen (Alembic)
+
+Das Schema wird automatisch beim App-Start über `alembic upgrade head` auf den neusten Stand gebracht. Manuelle Eingriffe sind nur in Ausnahmefällen nötig.
+
+### Neue Migration erstellen (bei Modelländerungen)
+
+```bash
+# Schema aus den SQLAlchemy-Modellen ableiten (Diff gegen aktuelle DB)
+alembic revision --autogenerate -m "beschreibung_der_aenderung"
+
+# Generierte Datei in alembic/versions/ prüfen und ggf. anpassen
+# Dann einspielen:
+alembic upgrade head
+```
+
+### Nützliche Alembic-Befehle
+
+```bash
+# Aktueller Migrations-Stand der Datenbank
+alembic current
+
+# History aller Migrations
+alembic history --verbose
+
+# Datenbank als "aktuell" markieren ohne DDL auszuführen
+# (für bestehende Datenbanken vor Einführung von Alembic)
+alembic stamp head
+
+# SQL-Vorschau ohne Ausführung
+alembic upgrade --sql head
+
+# Rollback einer Migration
+alembic downgrade -1
+```
+
+---
 
 ## Häufige Aufgaben
 

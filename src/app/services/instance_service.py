@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import re
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -6,6 +7,9 @@ from app.db.models import Instance
 from app.loader.config import LoaderConfig
 from app.loader.vector_store import VectorStore
 from app.utils.logging_config import setup_logger
+
+import re as _re
+_ANALYZER_RE = _re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 
 logger = setup_logger(__name__)
 
@@ -21,7 +25,11 @@ async def create_instance(
     config: LoaderConfig,
     name: str,
     description: str = "",
+    analyzer: str = "german",
 ) -> Instance:
+    if not analyzer or not _ANALYZER_RE.match(analyzer):
+        analyzer = "standard"
+
     slug = _slugify(name)
 
     # Slug-Kollision vermeiden
@@ -31,14 +39,16 @@ async def create_instance(
         slug = f"{base_slug}_{i}"
         i += 1
 
-    instance = Instance(name=name, slug=slug, description=description)
+    instance = Instance(name=name, slug=slug, description=description, settings={"opensearch_analyzer": analyzer})
     db.add(instance)
     await db.commit()
     await db.refresh(instance)
 
-    # OpenSearch-Index anlegen — in Thread, da _ensure_index() einen synchronen HTTP-Call macht.
-    # asyncio.to_thread verhindert, dass der Event Loop während der OpenSearch-Anfrage blockiert.
-    await asyncio.to_thread(VectorStore.for_instance, config, slug)
+    # OpenSearch-Index mit instanzspezifischem Analyzer anlegen.
+    # Der Analyzer ist im Index-Mapping einmalig festgelegt und kann nachträglich nicht geändert werden.
+    instance_config = copy.copy(config)
+    instance_config.opensearch_analyzer = analyzer
+    await asyncio.to_thread(VectorStore.for_instance, instance_config, slug)
 
     return instance
 
@@ -69,8 +79,8 @@ async def delete_instance(
         logger.warning(f"Index {index_name} konnte nicht gelöscht werden: {e}")
 
     # VectorStore-Cache für diesen Slug invalidieren
-    from app.loader.vector_store import _store_cache
-    _store_cache.pop(instance.slug, None)
+    from app.loader.vector_store import invalidate_instance_cache
+    invalidate_instance_cache(instance.slug)
 
     # Redis-Metadaten für alle Dokumente der Instanz löschen
     if redis is not None:

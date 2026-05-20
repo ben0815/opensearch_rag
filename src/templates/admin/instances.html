@@ -4,10 +4,18 @@
 <div class="d-flex align-items-center gap-3 mb-3">
   <h5 class="mb-0">Instanzen</h5>
   <div class="ms-auto d-flex gap-2">
+    <a href="/admin/status" class="btn btn-outline-secondary btn-sm">System-Status</a>
+    <a href="/admin/settings" class="btn btn-outline-secondary btn-sm">Einstellungen</a>
     <a href="/admin/groups" class="btn btn-outline-secondary btn-sm">Gruppen</a>
     <a href="/admin/users" class="btn btn-outline-secondary btn-sm">Benutzer</a>
   </div>
 </div>
+
+{% if request.query_params.get("error") == "create_failed" %}
+<div class="alert alert-danger alert-dismissible">Instanz konnte nicht angelegt werden. Bitte versuche es erneut.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
 
 <div class="card mb-4">
   <div class="card-header">Neue Instanz anlegen</div>
@@ -20,6 +28,32 @@
       <div class="col-auto">
         <label class="form-label small">Beschreibung</label>
         <input type="text" name="description" class="form-control form-control-sm">
+      </div>
+      <div class="col-auto">
+        <label class="form-label small">BM25-Sprache
+          <span class="text-muted"
+            title="OpenSearch-Analyzer: bestimmt Stemming und Stopwörter für die lexikalische Suche. Kann nach dem Anlegen nicht geändert werden. Gültige Werte: german, english, french, spanish, italian, portuguese, dutch, russian, arabic, u.v.m. — oder 'standard' für mehrsprachige Inhalte.">(?)</span>
+        </label>
+        <input type="text" name="opensearch_analyzer" value="standard"
+          list="analyzer-suggestions"
+          class="form-control form-control-sm" style="width:14rem"
+          pattern="[a-z][a-z0-9_\-]{0,63}" required
+          title="Nur Kleinbuchstaben, Ziffern, - und _ erlaubt (z.B. german, english, standard)">
+        <datalist id="analyzer-suggestions">
+          <option value="german">
+          <option value="english">
+          <option value="french">
+          <option value="spanish">
+          <option value="italian">
+          <option value="portuguese">
+          <option value="dutch">
+          <option value="russian">
+          <option value="arabic">
+          <option value="chinese">
+          <option value="japanese">
+          <option value="korean">
+          <option value="standard">
+        </datalist>
       </div>
       <div class="col-auto">
         <button type="submit" class="btn btn-primary btn-sm">Anlegen</button>
@@ -43,14 +77,18 @@
     {% for inst in instances %}
     <tr>
       <td>{{ inst.id }}</td>
-      <td>{{ inst.name }}</td>
+      <td><a href="/admin/instances/{{ inst.id }}">{{ inst.name }}</a></td>
       <td><code>{{ inst.slug }}</code></td>
       <td>{{ inst.description or "" }}</td>
       <td>
-        <form method="post" action="/admin/instances/delete/{{ inst.id }}"
-          data-confirm="Instanz und alle zugehörigen Daten löschen?">
-          <button type="submit" class="btn btn-danger btn-sm">Löschen</button>
-        </form>
+        <div class="d-flex gap-1">
+          <a href="/admin/instances/{{ inst.id }}" class="btn btn-outline-secondary btn-sm">Bearbeiten</a>
+          <a href="/documents?instance_id={{ inst.id }}" class="btn btn-outline-secondary btn-sm">Dokumente</a>
+          <form method="post" action="/admin/instances/delete/{{ inst.id }}"
+            data-confirm="Instanz '{{ inst.name }}' ({{ inst.slug }}) und alle zugehörigen Dokumente, Chat-Verläufe und Zuweisungen unwiderruflich löschen?">
+            <button type="submit" class="btn btn-danger btn-sm">Löschen</button>
+          </form>
+        </div>
       </td>
     </tr>
     {% else %}

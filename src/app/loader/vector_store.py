@@ -21,6 +21,18 @@ _store_cache: dict[str, "VectorStore"] = {}
 _store_cache_lock = threading.Lock()
 
 
+def invalidate_instance_cache(slug: str) -> None:
+    """Remove a single VectorStore from the cache. Call when instance settings change."""
+    with _store_cache_lock:
+        _store_cache.pop(slug, None)
+
+
+def clear_vector_store_cache() -> None:
+    """Remove all VectorStores from the cache. Call after global search pipeline changes."""
+    with _store_cache_lock:
+        _store_cache.clear()
+
+
 class VectorStore:
     def __init__(self, config: LoaderConfig, instance_slug: str = "default"):
         self.config = config
@@ -224,6 +236,8 @@ class VectorStore:
                         'type': 'object',
                         'properties': {
                             'source': {'type': 'keyword'},
+                            'filename': {'type': 'keyword'},
+                            'file_hash': {'type': 'keyword'},
                             'page': {'type': 'integer'},
                             'chunk_index': {'type': 'integer'},
                             'total_chunks': {'type': 'integer'},

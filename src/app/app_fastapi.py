@@ -96,6 +96,36 @@ async def _session_cleanup_loop() -> None:
             logger.error(f"Session cleanup failed: {e}")
 
 
+_TUNABLE_SETTINGS = {
+    "llm_model", "llm_temperature", "llm_num_ctx", "llm_timeout_seconds",
+    "hybrid_bm25_weight", "hybrid_knn_weight", "hybrid_k", "hybrid_score_threshold",
+}
+
+_SETTING_TYPES: dict[str, type] = {
+    "llm_temperature": float, "llm_num_ctx": int, "llm_timeout_seconds": int,
+    "hybrid_bm25_weight": float, "hybrid_knn_weight": float,
+    "hybrid_k": int, "hybrid_score_threshold": float,
+    "llm_model": str,
+}
+
+
+async def _load_db_settings(config: LoaderConfig, db_factory) -> None:
+    """Load saved admin settings from app_settings table. Gracefully skips if table missing."""
+    from app.db.models import AppSetting
+    try:
+        async with db_factory() as db:
+            rows = (await db.execute(select(AppSetting))).scalars().all()
+            for row in rows:
+                if row.key in _TUNABLE_SETTINGS and hasattr(config, row.key):
+                    cast = _SETTING_TYPES.get(row.key, str)
+                    try:
+                        setattr(config, row.key, cast(row.value))
+                    except (ValueError, TypeError) as e:
+                        logger.warning("app_settings: skipping invalid value for %s: %s", row.key, e)
+    except Exception as e:
+        logger.warning("app_settings table not yet available, using env defaults: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: Singletons einmalig anlegen. Shutdown: Verbindungen sauber schließen."""
@@ -109,6 +139,8 @@ async def lifespan(app: FastAPI):
         redis_kwargs["password"] = config.redis_password
     app.state.redis = aioredis.Redis(**redis_kwargs)
     await app.state.redis.ping()
+    # Lade gespeicherte Admin-Einstellungen aus DB (Klasse-A-Parameter überschreiben Env-Defaults)
+    await _load_db_settings(config, get_session_factory)
     cleanup_task = asyncio.create_task(_session_cleanup_loop())
     yield
     cleanup_task.cancel()
@@ -152,4 +184,5 @@ async def root(request: Request, db: AsyncSession = Depends(get_db)):
 
 @app.get("/health")
 async def health():
-    return JSONResponse({"status": "ok"})
+    from app import __version__
+    return JSONResponse({"status": "ok", "version": __version__})

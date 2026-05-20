@@ -57,8 +57,13 @@ opensearch_rag/
 │   ├── .env                          # Lokale Konfiguration (nicht in Git)
 │   ├── .env.example                  # Vorlage mit allen Variablen und Kommentaren
 │   ├── redis/redis.conf              # Redis-Persistenz- und Memory-Konfiguration
-│   ├── postgres/init.sql             # DB-Initialisierung
-│   └── scripts/entrypoint.sh        # Startet uvicorn (exec python -m …)
+│   ├── postgres/init.sql             # Referenzdokument (nicht mehr aktiv eingebunden)
+│   └── scripts/entrypoint.sh        # Führt alembic upgrade head aus, dann uvicorn
+├── alembic.ini                       # Alembic-Konfiguration (script_location, sqlalchemy.url)
+└── alembic/
+    ├── env.py                        # Async-Migrationsumgebung (liest DATABASE_URL aus Env)
+    ├── script.py.mako                # Template für neue Migrations
+    └── versions/                     # Migrations-Skripte (chronologisch nummeriert)
 └── src/app/
     ├── app_fastapi.py                # Einstiegspunkt: FastAPI-App mit lifespan, Middleware, Router
     ├── ingest.py                     # CLI-Tool: python -m app.ingest --instance <slug> <pdfs>
@@ -161,12 +166,33 @@ Sessions werden als zufällige Tokens (32 Byte urlsafe) in PostgreSQL gespeicher
 
 ## Häufige Aufgaben
 
+### Datenbankmigrationen (Alembic)
+
+```bash
+# Schema der laufenden Datenbank prüfen
+alembic current
+
+# Neue Migration aus Modelländerungen ableiten
+alembic revision --autogenerate -m "kurze_beschreibung"
+# → generierte Datei in alembic/versions/ immer manuell prüfen!
+
+# Migration einspielen (passiert im Container automatisch beim Start)
+alembic upgrade head
+
+# Rollback
+alembic downgrade -1
+
+# Bestehende Datenbank (vor Alembic-Einführung) als aktuell markieren
+alembic stamp head
+```
+
 ### Lokale Entwicklung (ohne Docker)
 ```bash
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 pip install -e .                        # Installiert src/ als package
 # infra/.env muss existieren
+alembic upgrade head                    # Schema anlegen
 uvicorn app.app_fastapi:app --reload --port 8081
 ```
 Voraussetzung: OpenSearch, Redis und PostgreSQL laufen (z.B. via `docker compose up opensearch redis postgres -d`).

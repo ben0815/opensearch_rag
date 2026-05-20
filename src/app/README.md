@@ -46,7 +46,7 @@ Legt einen Benutzer mit lokalem bcrypt-Hash an (kein LDAP erforderlich).
 
 | Datei | Inhalt |
 |---|---|
-| `models.py` | SQLAlchemy-Modelle: `User`, `Instance`, `InstanceMember`, `Group`, `GroupMember`, `GroupInstanceRole`, `ChatHistory`, `Session` |
+| `models.py` | SQLAlchemy-Modelle: `User`, `Instance`, `InstanceMember`, `Group`, `GroupMember`, `GroupInstanceRole`, `AppSetting`, `ChatHistory`, `Session` |
 | `session.py` | `AsyncEngine` (pool_size=10), `get_session_factory()`, `get_db()` FastAPI-Dependency |
 
 ## loader/
@@ -78,7 +78,7 @@ Key-Schema: `doc:{instance_slug}:{sha256}`. Listing via SCAN (kein KEYS).
 | `auth.py` | `GET/POST /login`, `GET /logout` — Rate Limit: 10 Logins/Minute |
 | `chat.py` | `GET /chat`, `POST /chat/stream` (SSE), `GET /chat/history`, `POST /chat/save-history`, `POST /chat/history/clear`, `POST /chat/history/{id}/delete` |
 | `documents.py` | `GET /documents`, `POST /documents/upload` (SSE), `POST /documents/delete/{hash}` |
-| `admin.py` | `/admin/instances`, `/admin/groups`, `/admin/users` + alle CRUD-Unterrouten |
+| `admin.py` | `/admin/instances`, `/admin/groups`, `/admin/users` + alle CRUD-Unterrouten; `/admin/settings` (globale LLM/Such-Parameter); `/admin/status` (System-Health-Dashboard) |
 
 ## services/
 
@@ -86,7 +86,8 @@ Key-Schema: `doc:{instance_slug}:{sha256}`. Listing via SCAN (kein KEYS).
 |---|---|
 | `chat_service.py` | `stream_answer(question, slug, config, history)` — synchroner SSE-Generator (läuft via `iterate_in_threadpool`); übergibt letzte 3 Chat-Einträge als Gesprächskontext; `save_to_history()` |
 | `document_service.py` | `get_document_processor()`, `list_documents()`, `delete_document()` |
-| `instance_service.py` | `create_instance()`, `delete_instance()` (OpenSearch-Index + VectorStore-Cache) |
+| `instance_service.py` | `create_instance(analyzer=…)` — wählt BM25-Analyzer pro Instanz, speichert ihn in `instance.settings`; `delete_instance()` (OpenSearch-Index + VectorStore-Cache) |
+| `config_service.py` | `get_effective_config(global_config, instance_settings)` — überlagert globale Config mit instanzspezifischen Einstellungen (LLM-Modell, Temperature, num_ctx, hybrid_k, Score-Threshold) |
 | `user_service.py` | `get_user_instances()`, `get_effective_role()` — berücksichtigt direkte + Gruppen-Zuweisungen |
 
 ## utils/

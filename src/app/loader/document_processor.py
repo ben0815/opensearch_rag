@@ -154,6 +154,7 @@ class DocumentProcessor:
                     metadata = {
                         'source': str(file_path),
                         'filename': original_filename or file_path.name,
+                        'file_hash': file_hash,
                         'page': i + 1,
                         'total_pages': total_pages,
                     }

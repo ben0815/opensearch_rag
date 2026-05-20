@@ -38,6 +38,8 @@ RUN python -m pip install --upgrade pip && \
 # Copy the rest of the application
 COPY setup.py .
 COPY src/ src/
+COPY alembic.ini .
+COPY alembic/ alembic/
 #COPY entrypoint.sh .
 COPY infra/scripts/entrypoint.sh ./entrypoint.sh
 
@@ -60,6 +62,8 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /build/src /app/src
 COPY --from=builder /build/setup.py /app/setup.py
+COPY --from=builder /build/alembic.ini /app/alembic.ini
+COPY --from=builder /build/alembic /app/alembic
 COPY --from=builder /build/.cache/huggingface /app/.cache/huggingface
 
 # Set environment variables

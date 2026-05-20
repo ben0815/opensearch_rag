@@ -49,10 +49,16 @@ def _format_history(history) -> str:
     return "\n\n".join(parts) + "\n\n"
 
 
+def clear_llm_cache() -> None:
+    """Invalidate the entire LLM cache. Call after changing LLM parameters at runtime."""
+    with _llm_cache_lock:
+        _llm_cache.clear()
+
+
 def get_llm(config: LoaderConfig) -> BedrockLLM | OllamaLLM:
-    """Get the LLM based on configuration (cached per model key)."""
+    """Get the LLM based on configuration (cached per model+params key)."""
     llm_type = config.llm_type
-    cache_key = f'{llm_type}:{config.llm_model}'
+    cache_key = f'{llm_type}:{config.llm_model}:{config.llm_temperature}:{config.llm_num_ctx}:{config.llm_timeout_seconds}'
 
     if cache_key in _llm_cache:
         return _llm_cache[cache_key]
@@ -91,7 +97,7 @@ def retrieve(
 ) -> tuple[list[Document], dict]:
     """Perform hybrid search (BM25 + kNN) and return deduplicated docs."""
     cleaned_question = question.strip()
-    results_with_scores = vector_store.hybrid_search(cleaned_question)
+    results_with_scores = vector_store.hybrid_search(cleaned_question, k=config.hybrid_k)
 
     seen: set[str] = set()
     unique_results: list = []

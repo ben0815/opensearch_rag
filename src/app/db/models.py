@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, DateTime, JSON
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, DateTime, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
@@ -19,6 +19,7 @@ class User(Base):
     display_name         = Column(String(255))
     email                = Column(String(255))
     is_global_admin      = Column(Boolean, nullable=False, default=False)
+    is_active            = Column(Boolean, nullable=False, default=True)
     local_password_hash  = Column(String(255))
     created_at           = Column(DateTime, nullable=False, default=_utcnow)
     last_login           = Column(DateTime)
@@ -33,7 +34,9 @@ class Instance(Base):
     name        = Column(String(255), nullable=False)
     slug        = Column(String(64), unique=True, nullable=False)
     description = Column(Text)
+    settings    = Column(JSON)
     created_at  = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at  = Column(DateTime, onupdate=_utcnow)
     members     = relationship("InstanceMember", back_populates="instance")
 
 
@@ -50,10 +53,12 @@ class InstanceMember(Base):
 
 class Group(Base):
     __tablename__ = "groups"
+    __table_args__ = (UniqueConstraint("name", name="groups_name_unique"),)
     id            = Column(Integer, primary_key=True)
     name          = Column(String(255), nullable=False)
     ldap_group_dn = Column(Text)
     created_at    = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at    = Column(DateTime, onupdate=_utcnow)
     instance_roles = relationship("GroupInstanceRole", back_populates="group")
     members        = relationship("GroupMember", back_populates="group")
 
@@ -72,6 +77,14 @@ class GroupMember(Base):
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
     user     = relationship("User", back_populates="group_memberships")
     group    = relationship("Group", back_populates="members")
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+    key        = Column(String(64), primary_key=True)
+    value      = Column(Text, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    updated_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
 
 
 class ChatHistory(Base):

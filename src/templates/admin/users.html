@@ -15,6 +15,16 @@
   </div>
 </div>
 
+{% if request.query_params.get("error") == "last_admin" %}
+<div class="alert alert-danger alert-dismissible">Der letzte Administrator kann nicht entfernt oder deaktiviert werden.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% elif request.query_params.get("error") == "self_modify" %}
+<div class="alert alert-warning alert-dismissible">Der eigene Account kann hier nicht geändert werden.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <div class="table-responsive">
   <table class="table table-sm table-hover align-middle">
     <thead>
@@ -23,25 +33,70 @@
         <th>Name</th>
         <th>E-Mail</th>
         <th>Admin</th>
+        <th>Status</th>
         <th>Gruppen</th>
         <th>Instanz-Zuweisungen</th>
+        <th>Erstellt / Login</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
     {% for u in users %}
     <tr>
-      <td><code>{{ u.ldap_uid }}</code></td>
+      <td>
+        <code>{{ u.ldap_uid }}</code>
+        {% if u.local_password_hash %}
+        <span class="badge bg-secondary ms-1" title="Lokales Passwort — nicht via LDAP synchronisiert">LOKAL</span>
+        {% endif %}
+      </td>
       <td>{{ u.display_name or "" }}</td>
       <td>{{ u.email or "" }}</td>
       <td>
+        {% if u.id == request.state.user.id %}
+        <span class="badge {{ 'bg-warning text-dark' if u.is_global_admin else 'bg-light text-muted border' }}"
+          title="Eigener Account — Admin-Status hier nicht änderbar">
+          {{ "Admin" if u.is_global_admin else "Kein Admin" }}
+        </span>
+        {% else %}
         <form method="post" action="/admin/users/{{ u.id }}/set-admin" class="d-inline">
           <input type="hidden" name="is_admin" value="{{ "false" if u.is_global_admin else "true" }}">
-          <button type="submit"
-            class="btn btn-sm {{ 'btn-warning' if u.is_global_admin else 'btn-outline-secondary' }}">
-            {{ "Admin" if u.is_global_admin else "Kein Admin" }}
+          {% if u.is_global_admin %}
+          <button type="submit" class="btn btn-sm btn-warning"
+            data-confirm="'{{ u.ldap_uid }}' Admin-Rechte entziehen?{% if not u.local_password_hash %} (LDAP-Nutzer: Rechte werden beim nächsten Login ggf. aus LDAP wiederhergestellt.){% endif %}">
+            Admin
           </button>
+          {% else %}
+          <button type="submit" class="btn btn-sm btn-outline-secondary"
+            data-confirm="'{{ u.ldap_uid }}' zum Global-Admin ernennen? Der Benutzer erhält Vollzugriff auf alle Instanzen und die Verwaltung.">
+            Kein Admin
+          </button>
+          {% endif %}
         </form>
+        {% endif %}
+        {% if not u.local_password_hash %}
+        <span class="d-block text-muted" style="font-size:0.7em"
+          title="Admin-Status wird bei jedem LDAP-Login synchronisiert. Manuelle Änderungen können überschrieben werden.">
+          LDAP-sync
+        </span>
+        {% endif %}
+      </td>
+      <td>
+        {% if u.is_active is defined and not u.is_active %}
+        <span class="badge bg-danger">Deaktiviert</span>
+        <form method="post" action="/admin/users/{{ u.id }}/set-active" class="d-inline ms-1">
+          <input type="hidden" name="is_active" value="true">
+          <button type="submit" class="btn btn-sm btn-outline-success">Aktivieren</button>
+        </form>
+        {% else %}
+        <span class="badge bg-success">Aktiv</span>
+        {% if u.id != request.state.user.id %}
+        <form method="post" action="/admin/users/{{ u.id }}/set-active" class="d-inline ms-1"
+          data-confirm="Benutzer '{{ u.ldap_uid }}' deaktivieren? Der Benutzer kann sich danach nicht mehr anmelden. Bestehende Sessions laufen noch bis zu ihrem Ablauf weiter.">
+          <input type="hidden" name="is_active" value="false">
+          <button type="submit" class="btn btn-sm btn-outline-warning">Deaktivieren</button>
+        </form>
+        {% endif %}
+        {% endif %}
       </td>
       <td>
         {% for gname in groups_by_user.get(u.id, []) %}
@@ -80,6 +135,10 @@
           </div>
         </form>
       </td>
+      <td class="text-muted small" style="white-space:nowrap">
+        {% if u.created_at %}<div>{{ u.created_at.strftime('%d.%m.%Y') }}</div>{% endif %}
+        {% if u.last_login %}<div class="text-muted">Login: {{ u.last_login.strftime('%d.%m.%Y') }}</div>{% endif %}
+      </td>
       <td>
         {% if u.id != request.state.user.id %}
         <form method="post" action="/admin/users/{{ u.id }}/delete"
@@ -93,7 +152,7 @@
     </tr>
     {% else %}
     <tr>
-      <td colspan="7" class="text-muted text-center">Keine Benutzer vorhanden.</td>
+      <td colspan="9" class="text-muted text-center">Keine Benutzer vorhanden.</td>
     </tr>
     {% endfor %}
     </tbody>

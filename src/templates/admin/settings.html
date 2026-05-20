@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Globale Einstellungen{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-3">
+  <h5 class="mb-0">Globale Einstellungen</h5>
+  <div class="ms-auto d-flex gap-2">
+    <a href="/admin/status" class="btn btn-outline-secondary btn-sm">System-Status</a>
+    <a href="/admin/instances" class="btn btn-outline-secondary btn-sm">Instanzen</a>
+  </div>
+</div>
+
+{% if saved %}
+<div class="alert alert-success alert-dismissible">Einstellungen gespeichert.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% elif error %}
+<div class="alert alert-danger alert-dismissible">{{ error }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-header">LLM &amp; Suche</div>
+      <div class="card-body">
+        <form method="post" action="/admin/settings">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th style="width:30%">Parameter</th>
+                <th style="width:35%">Wert</th>
+                <th>Hinweis</th>
+                <th style="width:6rem">Quelle</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for s in settings_spec %}
+            <tr>
+              <td><label class="form-label mb-0 fw-semibold small" for="f_{{ s.key }}">{{ s.label }}</label></td>
+              <td>
+                <input
+                  type="{{ s.type }}"
+                  id="f_{{ s.key }}"
+                  name="{{ s.key }}"
+                  value="{{ config[s.key] }}"
+                  class="form-control form-control-sm"
+                  {% if s.min is not none %}min="{{ s.min }}"{% endif %}
+                  {% if s.max is not none %}max="{{ s.max }}"{% endif %}
+                  {% if s.step is not none %}step="{{ s.step }}"{% endif %}
+                >
+              </td>
+              <td class="text-muted small">{{ s.hint }}</td>
+              <td>
+                {% if s.key in db_keys %}
+                <span class="badge bg-primary" title="Aus Datenbank — überschreibt .env">DB</span>
+                {% else %}
+                <span class="badge bg-secondary" title="Aus Umgebungsvariable / Standard">.env</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          <div class="text-muted small mb-3">
+            Werte mit <span class="badge bg-primary">DB</span> wurden über diese Seite gesetzt und überschreiben die Umgebungsvariable.
+            Werte mit <span class="badge bg-secondary">.env</span> stammen aus der Konfigurationsdatei oder dem Standard.
+          </div>
+          <button type="submit" class="btn btn-primary">Speichern &amp; anwenden</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card">
+      <div class="card-header">Aktive Konfiguration</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr><th class="ps-3">LLM-Modell</th><td class="pe-3"><code>{{ config.llm_model }}</code></td></tr>
+            <tr><th class="ps-3">Temperature</th><td class="pe-3">{{ config.llm_temperature }}</td></tr>
+            <tr><th class="ps-3">num_ctx</th><td class="pe-3">{{ config.llm_num_ctx }}</td></tr>
+            <tr><th class="ps-3">Timeout (s)</th><td class="pe-3">{{ config.llm_timeout_seconds }}</td></tr>
+            <tr><th class="ps-3">BM25-Gewicht</th><td class="pe-3">{{ config.hybrid_bm25_weight }}</td></tr>
+            <tr><th class="ps-3">kNN-Gewicht</th><td class="pe-3">{{ config.hybrid_knn_weight }}</td></tr>
+            <tr><th class="ps-3">hybrid_k</th><td class="pe-3">{{ config.hybrid_k }}</td></tr>
+            <tr><th class="ps-3">Score-Threshold</th><td class="pe-3">{{ config.hybrid_score_threshold }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card mt-3">
+      <div class="card-header">Hinweise</div>
+      <div class="card-body small text-muted">
+        <ul class="mb-0 ps-3">
+          <li>Änderungen werden sofort übernommen — kein Neustart nötig.</li>
+          <li>LLM-Modell-Änderungen löschen den Modell-Cache.</li>
+          <li>Suche-Änderungen aktualisieren die OpenSearch-Pipeline aller Instanzen.</li>
+          <li>BM25 + kNN ergeben immer 1,0 (kNN wird automatisch berechnet).</li>
+          <li>Instanz-spezifische Einstellungen überschreiben globale Werte.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

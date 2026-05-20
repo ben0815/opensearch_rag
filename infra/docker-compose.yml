@@ -101,15 +101,16 @@ services:
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
       - EMBEDDING_SIZE=${EMBEDDING_SIZE:-1024}
       - CHUNK_SIZE=${CHUNK_SIZE:-400}
-      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-40}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-60}
       - EMBEDDING_MAX_TOKENS=${EMBEDDING_MAX_TOKENS:-600}
       - TOKENIZER_MODEL_ID=${TOKENIZER_MODEL_ID:-BAAI/bge-m3}
-      - OPENSEARCH_ANALYZER=${OPENSEARCH_ANALYZER:-german}
+      - OPENSEARCH_ANALYZER=${OPENSEARCH_ANALYZER:-standard}
       # Hybrid search settings
       - HYBRID_SEARCH_PIPELINE_NAME=${HYBRID_SEARCH_PIPELINE_NAME:-hybrid-rag-pipeline}
-      - HYBRID_BM25_WEIGHT=${HYBRID_BM25_WEIGHT:-0.3}
-      - HYBRID_KNN_WEIGHT=${HYBRID_KNN_WEIGHT:-0.7}
+      - HYBRID_BM25_WEIGHT=${HYBRID_BM25_WEIGHT:-0.4}
+      - HYBRID_KNN_WEIGHT=${HYBRID_KNN_WEIGHT:-0.6}
       - HYBRID_K=${HYBRID_K:-10}
+      - HYBRID_SCORE_THRESHOLD=${HYBRID_SCORE_THRESHOLD:-0.1}
       # Auth / DB
       - DATABASE_URL=postgresql+asyncpg://raguser:${POSTGRES_PASSWORD:-changeme}@postgres:5432/ragdb
       - SESSION_LIFETIME_HOURS=${SESSION_LIFETIME_HOURS:-8}
@@ -124,15 +125,20 @@ services:
       - LDAP_MAIL_ATTR=${LDAP_MAIL_ATTR:-mail}
       - LDAP_ADMIN_GROUP_DN=${LDAP_ADMIN_GROUP_DN:-}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      - LLM_NUM_CTX=${LLM_NUM_CTX:-16384}
       # Timeout für LLM-Antwort in Sekunden — bei großen Modellen ggf. erhöhen.
-      # Muss < _STREAM_TIMEOUT_MS/1000 in chat.js (aktuell 150s) bleiben.
-      - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-120}
+      # Das Frontend (chat.js) wartet LLM_TIMEOUT_SECONDS + 30s — beide müssen konsistent sein.
+      - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-240}
+      - SECURE_COOKIES=${SECURE_COOKIES:-false}
       # Debug settings
       - PYTHONUNBUFFERED=1
     volumes:
-      # Entwicklung: Live-Code-Mount für schnelle Iteration ohne Image-Rebuild.
-      # Produktion: Diese Zeile entfernen — Code ist im Docker-Image eingebaut.
+      # ACHTUNG: Entwicklungs-Mounts — für Produktion diese Zeilen auskommentieren!
+      # Mit diesen Mounts überschreibt der Host-Code das Docker-Image (kein Rebuild nötig).
+      # In Produktion MÜSSEN diese Zeilen entfernt werden, sonst ist der gebaute Container wirkungslos.
       - ../src:/app/src
+      - ../alembic:/app/alembic
+      - ../alembic.ini:/app/alembic.ini
       - ./logs:/app/logs
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
@@ -191,7 +197,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      # init.sql wird nicht mehr benötigt — das Schema wird von Alembic beim App-Start verwaltet.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U raguser -d ragdb"]
       interval: 5s

@@ -45,10 +45,10 @@ Speichert Dokument-Metadaten als JSON-Strings.
 Relationale Datenbank für Anwendungsdaten.
 
 - **Image**: `postgres:16-alpine`
-- **Initialisierung**: `postgres/init.sql`
+- **Schema**: via Alembic (`alembic upgrade head` läuft automatisch beim App-Start)
 - **Datenbank**: `ragdb`, **Benutzer**: `raguser`
 - **Volume**: `postgres_data` (persistent)
-- **Tabellen**: `users`, `instances`, `instance_members`, `groups`, `group_members`, `group_instance_roles`, `sessions`, `chat_history`
+- **Tabellen**: `users`, `instances`, `instance_members`, `groups`, `group_members`, `group_instance_roles`, `app_settings`, `sessions`, `chat_history`
 
 ## Konfiguration
 

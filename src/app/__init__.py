@@ -10,5 +10,5 @@ __all__ = [
     'setup_logger',
 ]
 
-__version__ = '0.1.0'
-__package_name__ = 'langchain-opensearch-rag'
+__version__ = '0.9.0'
+__package_name__ = 'opensearch-rag'

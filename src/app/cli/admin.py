@@ -26,6 +26,7 @@ async def _create_admin(username: str, password: str):
                 display_name=username,
                 email="",
                 is_global_admin=True,
+                is_active=True,
                 local_password_hash=pw_hash,
             )
             db.add(user)

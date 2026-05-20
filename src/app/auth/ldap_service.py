@@ -79,7 +79,11 @@ def authenticate(username: str, password: str) -> dict:
         if expire_epoch_days > 0:
             expire_dt = datetime.fromtimestamp(expire_epoch_days * 86400, tz=timezone.utc)
             if expire_dt < datetime.now(tz=timezone.utc):
-                raise LDAPAccountExpiredError("Account abgelaufen (shadowExpire)")
+                # Prüfen ob shadowInactive eine Toleranzperiode nach Ablauf gewährt
+                shadow_inactive = getattr(entry, "shadowInactive", None)
+                grace_days = int(shadow_inactive.value) if shadow_inactive and shadow_inactive.value else 0
+                if grace_days <= 0 or expire_dt.timestamp() + grace_days * 86400 < datetime.now(tz=timezone.utc).timestamp():
+                    raise LDAPAccountExpiredError("Account abgelaufen (shadowExpire/shadowInactive)")
 
     is_admin = False
     if LDAP_ADMIN_GROUP_DN:

@@ -11,6 +11,7 @@ from app.loader.config import LoaderConfig
 from app.dependencies import get_config, limiter
 from app.services.user_service import get_user_instances, get_effective_role
 from app.services.chat_service import stream_answer, save_to_history
+from app.services.config_service import get_effective_config
 
 from app.utils.templates import templates
 
@@ -26,6 +27,7 @@ async def chat_page(
     request: Request,
     instance_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    config: LoaderConfig = Depends(get_config),
 ):
     user = request.state.user
     user_instances = await get_user_instances(db, user)
@@ -45,6 +47,7 @@ async def chat_page(
             "instances": [],
             "active_instance": None,
             "error": error_msg,
+            "stream_timeout_ms": (config.llm_timeout_seconds + 30) * 1000,
         })
 
     active = None
@@ -58,6 +61,7 @@ async def chat_page(
         "instances": user_instances,
         "active_instance": active,
         "error": None,
+        "stream_timeout_ms": (config.llm_timeout_seconds + 30) * 1000,
     })
 
 
@@ -98,9 +102,11 @@ async def chat_stream(
     history_result = await db.execute(history_stmt)
     recent_history = list(reversed(history_result.scalars().all()))
 
+    effective_config = get_effective_config(config, instance.settings)
+
     def _generator():
         try:
-            yield from stream_answer(question, instance.slug, config, recent_history)
+            yield from stream_answer(question, instance.slug, effective_config, recent_history)
         except Exception as e:
             logger.error("Stream-Fehler für Instanz %s: %s", instance.slug, e, exc_info=True)
             payload = json.dumps({"message": "Interner Fehler beim Generieren der Antwort."})

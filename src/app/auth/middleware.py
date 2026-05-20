@@ -21,7 +21,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         async with get_session_factory()() as db:
             user = await get_user_by_token(db, token)
 
-        if not user:
+        if not user or not getattr(user, "is_active", True):
             response = RedirectResponse(url="/login", status_code=302)
             response.delete_cookie("session_token")
             return response
