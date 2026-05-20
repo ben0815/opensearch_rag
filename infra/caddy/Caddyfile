@@ -1,0 +1,13 @@
+# Caddyfile — Reverse-Proxy vor der RAG-App
+#
+# Vor dem ersten Start:
+#   1. DOMAIN auf die tatsächliche Domain setzen (z.B. rag.example.com)
+#   2. APP_BIND_HOST=127.0.0.1 in infra/.env setzen, damit der App-Port
+#      nicht mehr direkt von außen erreichbar ist
+#   3. Stack starten: docker compose --profile caddy up -d
+#
+# Caddy bezieht automatisch ein TLS-Zertifikat via Let's Encrypt.
+
+{$DOMAIN:rag.example.com} {
+    reverse_proxy app:8081
+}

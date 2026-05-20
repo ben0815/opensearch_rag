@@ -28,6 +28,9 @@ files/
 images/
 *.pdf
 logs/
+!infra/logs/
+infra/logs/*
+!infra/logs/.gitkeep
 
 # ideen
 ideen.md

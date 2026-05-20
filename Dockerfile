@@ -44,7 +44,7 @@ COPY alembic/ alembic/
 COPY infra/scripts/entrypoint.sh ./entrypoint.sh
 
 # Install the application
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir .
 
 # Pre-download tokenizer into a fixed path that the runtime stage can copy
 ENV HF_HOME=/build/.cache/huggingface
