@@ -40,6 +40,7 @@
     "placeholder": "Enter your question…",
     "send": "Send",
     "thinking": "Generating answer…",
+    "composing": "Composing answer…",
     "sources": "Sources",
     "noAnswer": "No answer received.",
     "historyEmpty": "No questions asked yet.",
@@ -50,7 +51,8 @@
     "aborted": "Answer aborted",
     "timeout": "Timeout — please try again",
     "page": "Page {{page}}",
-    "score": "Score: {{score}}"
+    "score": "Score: {{score}}",
+    "sendHint": "Ctrl+Enter to send · Enter for new line"
   },
   "documents": {
     "title": "Documents",
@@ -74,7 +76,13 @@
     "instance": "Instance",
     "deleteConfirm": "Really delete this entry?",
     "deleteAllConfirm": "Delete entire history?",
-    "deleteAll": "Delete all"
+    "deleteAll": "Delete all",
+    "sources": "Sources",
+    "noSources": "No sources available",
+    "duration": "Duration",
+    "retrieval": "Retrieval",
+    "llmTime": "LLM",
+    "totalTime": "Total"
   },
   "admin": {
     "title": "Administration",
@@ -118,6 +126,10 @@
     "maxUploadMb": "Max upload size (MB)",
     "auditRetentionDays": "Audit retention (days)",
     "saved": "Settings saved"
+  },
+  "nav": {
+    "collapse": "Collapse menu",
+    "expand": "Expand menu"
   },
   "errors": {
     "network": "Network error — please check connection",

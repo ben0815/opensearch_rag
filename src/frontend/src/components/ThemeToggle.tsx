@@ -8,7 +8,7 @@ const THEMES = [
   { value: "dark", label: "Dunkel", icon: "bi-moon-stars" },
 ] as const;
 
-export default function ThemeToggle() {
+export default function ThemeToggle({ collapsed = false }: { collapsed?: boolean }) {
   const { theme, setTheme } = usePreferencesStore();
   const { i18n } = useTranslation();
   const current = THEMES.find((t) => t.value === theme) ?? THEMES[0];
@@ -19,9 +19,10 @@ export default function ThemeToggle() {
         variant="link"
         size="sm"
         className="nav-link d-flex align-items-center gap-2 px-3 py-2 text-body"
+        title={collapsed ? current.label : undefined}
       >
-        <i className={`bi ${current.icon}`} />
-        <span className="small">{current.label}</span>
+        <i className={`bi ${current.icon} flex-shrink-0`} />
+        <span className="sidebar-label small">{current.label}</span>
       </Dropdown.Toggle>
       <Dropdown.Menu>
         {THEMES.map((t) => (

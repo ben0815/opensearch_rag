@@ -52,8 +52,12 @@ export default function App() {
       .then(async (me) => {
         setUser(me);
         if (me.preferences?.language) setLanguage(me.preferences.language);
-        const instances = await userApi.instances();
-        setInstances(instances);
+        try {
+          const instances = await userApi.instances();
+          setInstances(instances);
+        } catch {
+          /* instances unavailable — user stays logged in with empty list */
+        }
         // Apply default instance preference
         if (me.default_instance_id) {
           useInstanceStore.getState().setSelectedId(me.default_instance_id);

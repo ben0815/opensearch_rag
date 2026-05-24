@@ -1,6 +1,10 @@
 import { useTranslation } from "react-i18next";
 
-export default function ThinkingIndicator() {
+interface Props {
+  label?: string;
+}
+
+export default function ThinkingIndicator({ label }: Props) {
   const { t } = useTranslation();
   return (
     <div className="d-flex align-items-center gap-2 text-body-secondary">
@@ -9,7 +13,7 @@ export default function ThinkingIndicator() {
         <span>·</span>
         <span>·</span>
       </div>
-      <small>{t("chat.thinking")}</small>
+      <small>{label ?? t("chat.thinking")}</small>
     </div>
   );
 }

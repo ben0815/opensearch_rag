@@ -31,9 +31,9 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
       if (!instanceId || streaming) return;
       setError(null);
 
-      const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: question };
+      const userMsg: ChatMessage = { id: uid(), role: "user", content: question };
       const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: uid(),
         role: "assistant",
         content: "",
         pending: true,
@@ -69,7 +69,10 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
         const decoder = new TextDecoder();
         let buf = "";
         let sources: SourceChunk[] = [];
+        let retrievalMs: number | undefined;
         let fullAnswer = "";
+        // eventType must live OUTSIDE the while loop so it survives chunk boundaries
+        let eventType = "message";
 
         while (true) {
           const { done, value } = await reader.read();
@@ -79,7 +82,6 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
           const lines = buf.split("\n");
           buf = lines.pop() ?? "";
 
-          let eventType = "message";
           for (const line of lines) {
             if (line.startsWith("event:")) {
               eventType = line.slice(6).trim();
@@ -89,7 +91,15 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
 
               if (eventType === "sources") {
                 try {
-                  sources = JSON.parse(raw) as SourceChunk[];
+                  const payload = JSON.parse(raw) as { docs: SourceChunk[]; retrieval_ms?: number };
+                  sources = payload.docs ?? [];
+                  retrievalMs = payload.retrieval_ms;
+                  // Show sources immediately — before LLM starts generating
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsg.id ? { ...m, sources } : m,
+                    ),
+                  );
                 } catch {
                   /* ignore */
                 }
@@ -107,13 +117,12 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
                             sources,
                             pending: false,
                             historyId: doneData.history_id,
-                            retrieval_ms: doneData.retrieval_ms,
+                            retrieval_ms: retrievalMs,
                             llm_generation_s: doneData.llm_generation_s,
                           }
                         : m,
                     ),
                   );
-                  // PATCH timing data
                   if (doneData.history_id) {
                     const ttftS = firstTokenTime
                       ? (firstTokenTime - startRef.current) / 1000
@@ -133,22 +142,32 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
                   /* ignore */
                 }
                 eventType = "message";
+              } else if (eventType === "error") {
+                try {
+                  const errData = JSON.parse(raw) as { message: string };
+                  setError(errData.message ?? "Server error");
+                } catch {
+                  /* ignore */
+                }
+                eventType = "message";
               } else {
                 // Regular token
                 try {
                   const token = JSON.parse(raw) as string;
-                  if (!ttftReported) {
-                    ttftReported = true;
-                    firstTokenTime = Date.now();
+                  if (typeof token === "string") {
+                    if (!ttftReported) {
+                      ttftReported = true;
+                      firstTokenTime = Date.now();
+                    }
+                    fullAnswer += token;
+                    setMessages((prev) =>
+                      prev.map((m) =>
+                        m.id === assistantMsg.id
+                          ? { ...m, content: fullAnswer, pending: false }
+                          : m,
+                      ),
+                    );
                   }
-                  fullAnswer += token;
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantMsg.id
-                        ? { ...m, content: fullAnswer, pending: false }
-                        : m,
-                    ),
-                  );
                 } catch {
                   /* ignore */
                 }
@@ -190,4 +209,9 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
 function getCsrf(): string {
   const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : "";
+}
+
+// uid() requires HTTPS; getRandomValues works everywhere
+function uid(): string {
+  return crypto.getRandomValues(new Uint32Array(3)).join("-");
 }

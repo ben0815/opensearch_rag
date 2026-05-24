@@ -10,6 +10,106 @@ import type { ChatHistoryOut, PaginatedChatHistory } from "@/types/api";
 
 const PER_PAGE = 20;
 
+interface ContextDoc {
+  filename: string;
+  source: string;
+  page?: number | null;
+  score: number;
+  excerpt: string;
+}
+
+function formatDuration(s: number): string {
+  return s < 60 ? `${s.toFixed(1)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+}
+
+function DurationChip({ meta }: { meta: Record<string, unknown> | null }) {
+  if (!meta) return null;
+  const total = meta.duration_s != null ? Number(meta.duration_s) : null;
+  const llm = meta.llm_generation_s != null ? Number(meta.llm_generation_s) : null;
+  const secs = total ?? llm;
+  if (secs == null) return null;
+  return (
+    <small className="text-body-secondary text-nowrap">
+      <i className="bi bi-stopwatch me-1" />
+      {formatDuration(secs)}
+    </small>
+  );
+}
+
+function SourcesSection({ docs }: { docs: ContextDoc[] }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+
+  if (docs.length === 0) return (
+    <div className="mt-3 pt-3 border-top small text-body-secondary">{t("history.noSources")}</div>
+  );
+
+  return (
+    <div className="mt-3 pt-3 border-top">
+      <Button
+        variant="link"
+        size="sm"
+        className="p-0 text-decoration-none fw-semibold"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <i className={`bi bi-chevron-${open ? "up" : "down"} me-1`} />
+        {t("history.sources")} ({docs.length})
+      </Button>
+      {open && (
+        <div className="mt-2 d-flex flex-column gap-2">
+          {docs.map((doc, i) => (
+            <div key={i} className="p-2 rounded border small">
+              <div className="d-flex justify-content-between align-items-center mb-1">
+                <span className="fw-semibold text-truncate me-2">
+                  <i className="bi bi-file-earmark-text me-1" />
+                  {doc.filename}
+                  {doc.page != null && (
+                    <Badge bg="secondary-subtle" text="secondary" className="ms-2">
+                      {t("chat.page", { page: doc.page })}
+                    </Badge>
+                  )}
+                </span>
+                <Badge bg="primary-subtle" text="primary" className="text-nowrap flex-shrink-0">
+                  {t("chat.score", { score: doc.score.toFixed(3) })}
+                </Badge>
+              </div>
+              <p className="mb-0 text-body-secondary" style={{ whiteSpace: "pre-wrap" }}>
+                {doc.excerpt}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimingSection({ meta }: { meta: Record<string, unknown> | null }) {
+  const { t } = useTranslation();
+  if (!meta) return null;
+
+  const retrieval = meta.retrieval_ms != null ? Number(meta.retrieval_ms) : null;
+  const llm = meta.llm_generation_s != null ? Number(meta.llm_generation_s) : null;
+  const total = meta.duration_s != null ? Number(meta.duration_s) : null;
+
+  if (retrieval == null && llm == null && total == null) return null;
+
+  return (
+    <div className="mt-2 d-flex flex-wrap gap-3 small text-body-secondary">
+      {retrieval != null && (
+        <span><i className="bi bi-search me-1" />{t("history.retrieval")}: {retrieval} ms</span>
+      )}
+      {llm != null && (
+        <span><i className="bi bi-cpu me-1" />{t("history.llmTime")}: {formatDuration(llm)}</span>
+      )}
+      {total != null && (
+        <span><i className="bi bi-stopwatch me-1" />{t("history.totalTime")}: {formatDuration(total)}</span>
+      )}
+    </div>
+  );
+}
+
 export default function HistoryPage() {
   const { t } = useTranslation();
   const selectedInstance = useInstanceStore((s) => s.selectedInstance());
@@ -61,6 +161,8 @@ export default function HistoryPage() {
     }
   }
 
+  const contextDocs = (detail?.context_docs ?? []) as ContextDoc[];
+
   return (
     <div className="p-4">
       <div className="d-flex align-items-center justify-content-between mb-4">
@@ -99,51 +201,64 @@ export default function HistoryPage() {
       ) : (
         <>
           <div className="d-flex flex-column gap-3 mb-4">
-            {data.items.map((item) => (
-              <div
-                key={item.id}
-                className="p-3 rounded border bg-body-secondary"
-                role="button"
-                onClick={() => setDetail(item)}
-                style={{ cursor: "pointer" }}
-              >
-                <div className="d-flex justify-content-between align-items-start">
-                  <div className="flex-grow-1 me-3">
-                    <p className="mb-1 fw-semibold text-truncate">{item.question}</p>
-                    <p
-                      className="mb-0 small text-body-secondary"
-                      style={{
-                        display: "-webkit-box",
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: "vertical",
-                        overflow: "hidden",
-                      }}
-                    >
-                      {item.answer}
-                    </p>
-                  </div>
-                  <div className="d-flex flex-column align-items-end gap-1">
-                    <Badge bg="secondary-subtle" text="secondary" className="text-nowrap">
-                      {item.instance_name}
-                    </Badge>
-                    <small className="text-body-secondary text-nowrap">
-                      {new Date(item.created_at).toLocaleString()}
-                    </small>
-                    <Button
-                      variant="link"
-                      size="sm"
-                      className="p-0 text-danger"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void handleDelete(item.id);
-                      }}
-                    >
-                      <i className="bi bi-trash" />
-                    </Button>
+            {data.items.map((item) => {
+              const meta = item.response_metadata;
+              const docCount = (item.context_docs ?? []).length;
+              return (
+                <div
+                  key={item.id}
+                  className="p-3 rounded border bg-body-secondary"
+                  role="button"
+                  onClick={() => setDetail(item)}
+                  style={{ cursor: "pointer" }}
+                >
+                  <div className="d-flex justify-content-between align-items-start">
+                    <div className="flex-grow-1 me-3">
+                      <p className="mb-1 fw-semibold text-truncate">{item.question}</p>
+                      <p
+                        className="mb-0 small text-body-secondary"
+                        style={{
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          overflow: "hidden",
+                        }}
+                      >
+                        {item.answer}
+                      </p>
+                    </div>
+                    <div className="d-flex flex-column align-items-end gap-1 flex-shrink-0">
+                      <Badge bg="secondary-subtle" text="secondary" className="text-nowrap">
+                        {item.instance_name}
+                      </Badge>
+                      <small className="text-body-secondary text-nowrap">
+                        {new Date(item.created_at).toLocaleString()}
+                      </small>
+                      <div className="d-flex align-items-center gap-2">
+                        {docCount > 0 && (
+                          <small className="text-body-secondary text-nowrap">
+                            <i className="bi bi-file-earmark-text me-1" />
+                            {docCount}
+                          </small>
+                        )}
+                        <DurationChip meta={meta} />
+                        <Button
+                          variant="link"
+                          size="sm"
+                          className="p-0 text-danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDelete(item.id);
+                          }}
+                        >
+                          <i className="bi bi-trash" />
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {data.total_pages > 1 && (
@@ -181,20 +296,9 @@ export default function HistoryPage() {
                   __html: DOMPurify.sanitize(marked.parse(detail.answer) as string),
                 }}
               />
-              {detail.response_metadata && (
-                <div className="mt-3 pt-3 border-top small text-body-secondary">
-                  {detail.response_metadata.retrieval_ms !== undefined && (
-                    <span className="me-3">
-                      Retrieval: {Number(detail.response_metadata.retrieval_ms).toFixed(0)} ms
-                    </span>
-                  )}
-                  {detail.response_metadata.llm_generation_s !== undefined && (
-                    <span>
-                      LLM: {Number(detail.response_metadata.llm_generation_s).toFixed(1)} s
-                    </span>
-                  )}
-                </div>
-              )}
+
+              <TimingSection meta={detail.response_metadata} />
+              <SourcesSection docs={contextDocs} />
             </Modal.Body>
           </>
         )}

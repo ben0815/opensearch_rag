@@ -72,10 +72,32 @@ body,
 }
 
 /* Sidebar */
+:root {
+  --rag-sidebar-collapsed-width: 56px;
+}
+
 .app-sidebar {
   width: var(--rag-sidebar-width);
   min-width: var(--rag-sidebar-width);
   border-right: 1px solid var(--bs-border-color);
+  transition: width 0.2s ease, min-width 0.2s ease;
+  overflow: hidden;
+}
+
+.app-sidebar.collapsed {
+  width: var(--rag-sidebar-collapsed-width);
+  min-width: var(--rag-sidebar-collapsed-width);
+}
+
+.sidebar-label {
+  transition: opacity 0.15s ease, width 0.15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.app-sidebar.collapsed .sidebar-label {
+  opacity: 0;
+  width: 0;
 }
 
 /* Upload drop zone */

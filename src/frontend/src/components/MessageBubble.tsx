@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { useTranslation } from "react-i18next";
 import type { ChatMessage } from "@/hooks/useChat";
 import SourcesPanel from "./SourcesPanel";
 import ThinkingIndicator from "./ThinkingIndicator";
@@ -12,8 +13,10 @@ interface Props {
 }
 
 export default function MessageBubble({ message }: Props) {
+  const { t } = useTranslation();
+
   const html = useMemo(() => {
-    if (message.role !== "assistant" || !message.content) return "";
+    if (message.role !== "assistant" || !message.content.trim()) return "";
     const raw = marked.parse(message.content) as string;
     return DOMPurify.sanitize(raw);
   }, [message.content, message.role]);
@@ -28,21 +31,25 @@ export default function MessageBubble({ message }: Props) {
     );
   }
 
+  const hasSources = (message.sources?.length ?? 0) > 0;
+  // Treat leading whitespace / lone newlines as "not yet real text"
+  const hasRealContent = message.content.trim().length > 0;
+
   return (
     <div className="d-flex justify-content-start mb-3">
       <div className="chat-bubble assistant" style={{ maxWidth: "85%" }}>
-        {message.pending && !message.content ? (
-          <ThinkingIndicator />
+        {!hasRealContent ? (
+          <ThinkingIndicator
+            label={hasSources ? t("chat.composing") : undefined}
+          />
         ) : (
-          <>
-            <div
-              className="markdown-body"
-              dangerouslySetInnerHTML={{ __html: html }}
-            />
-            {message.sources && message.sources.length > 0 && (
-              <SourcesPanel sources={message.sources} />
-            )}
-          </>
+          <div
+            className="markdown-body"
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        )}
+        {hasSources && (
+          <SourcesPanel sources={message.sources!} />
         )}
       </div>
     </div>
