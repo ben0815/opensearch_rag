@@ -1,4 +1,3 @@
-import time
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from fastapi.responses import JSONResponse
@@ -13,38 +12,17 @@ PUBLIC_PATHS = {
 }
 PUBLIC_PREFIXES = ("/assets/", "/static/")
 
-_MAINTENANCE_CACHE: dict = {"value": False, "ts": 0.0}
-_MAINTENANCE_TTL: float = 60.0
-
-
-async def _check_maintenance() -> bool:
-    now = time.monotonic()
-    if now - _MAINTENANCE_CACHE["ts"] < _MAINTENANCE_TTL:
-        return _MAINTENANCE_CACHE["value"]
-    try:
-        from app.db.models import AppSetting
-        from sqlalchemy import select
-        async with get_session_factory()() as db:
-            row = (await db.execute(
-                select(AppSetting).where(AppSetting.key == "maintenance_mode")
-            )).scalar_one_or_none()
-            val = row is not None and row.value.lower() in ("1", "true", "on")
-    except Exception:
-        val = False
-    _MAINTENANCE_CACHE["value"] = val
-    _MAINTENANCE_CACHE["ts"] = now
-    return val
-
-
-def invalidate_maintenance_cache() -> None:
-    _MAINTENANCE_CACHE["ts"] = 0.0
-
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
         if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
+            return await call_next(request)
+
+        # Non-API paths are served as the React SPA — let them through unauthenticated.
+        # AuthGuard in the frontend handles the redirect to /login.
+        if not path.startswith("/api/"):
             return await call_next(request)
 
         token = request.cookies.get("session_token")
@@ -60,7 +38,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return response
 
             # Maintenance mode: block non-admins with 503
-            in_maintenance = await _check_maintenance()
+            from app.services.config_service import is_maintenance_mode
+            in_maintenance = await is_maintenance_mode(db)
             if in_maintenance and not user.is_global_admin:
                 return JSONResponse(
                     {"detail": "Service temporarily unavailable (Wartungsmodus)"},

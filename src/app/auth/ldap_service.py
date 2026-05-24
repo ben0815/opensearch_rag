@@ -32,8 +32,8 @@ def _build_user_dn(uid: str, uid_attr: str, search_base: str) -> str:
 
 def authenticate(username: str, password: str, ldap_config: dict | None = None) -> dict:
     """
-    Bind as user, check status attributes.
-    ldap_config: dict from config_service.get_ldap_config() — overrides env defaults.
+    Authenticate a user against LDAP using search-then-bind when a bind DN is configured,
+    or direct bind otherwise.
 
     Returns dict with {uid, display_name, email, ldap_is_admin}.
     Raises LDAPAuthError subclass for locked/expired accounts.
@@ -46,26 +46,48 @@ def authenticate(username: str, password: str, ldap_config: dict | None = None) 
     dn_attr         = cfg.get("ldap_display_name_attr") or os.getenv("LDAP_DISPLAY_NAME_ATTR", "displayName")
     mail_attr       = cfg.get("ldap_mail_attr") or os.getenv("LDAP_MAIL_ATTR", "mail")
     admin_group_dn  = cfg.get("ldap_admin_group_dn") or os.getenv("LDAP_ADMIN_GROUP_DN", "")
+    bind_dn         = cfg.get("ldap_bind_dn") or os.getenv("LDAP_BIND_DN", "")
+    bind_password   = cfg.get("ldap_bind_password") or os.getenv("LDAP_BIND_PASSWORD", "")
 
     status_attrs = [uid_attr, dn_attr, mail_attr, "shadowExpire", "pwdAccountLockedTime", "shadowInactive"]
 
-    user_dn = _build_user_dn(username, uid_attr, search_base)
     server = Server(ldap_url, get_info=ALL)
 
-    try:
-        conn = Connection(server, user=user_dn, password=password, auto_bind=True)
-    except LDAPBindError:
-        raise
+    if bind_dn:
+        # Search-then-bind: connect as service account, find user's actual DN, re-bind as user
+        search_conn = Connection(server, user=bind_dn, password=bind_password, auto_bind=True)
+        search_conn.search(
+            search_base=search_base,
+            search_filter=f"({uid_attr}={escape_filter_chars(username)})",
+            attributes=status_attrs,
+        )
+        if not search_conn.entries:
+            logger.warning("LDAP: Benutzer '%s' nicht in '%s' gefunden", username, search_base)
+            raise LDAPBindError("Benutzer nicht gefunden")
+        entry = search_conn.entries[0]
+        user_dn = entry.entry_dn
+        search_conn.unbind()
 
-    conn.search(
-        search_base=search_base,
-        search_filter=f"({uid_attr}={escape_filter_chars(username)})",
-        attributes=status_attrs,
-    )
-    if not conn.entries:
-        raise LDAPAuthError("Benutzer nicht gefunden nach Bind")
+        try:
+            conn = Connection(server, user=user_dn, password=password, auto_bind=True)
+        except LDAPBindError:
+            raise
+    else:
+        # Direct bind: construct DN from uid_attr and search_base
+        user_dn = _build_user_dn(username, uid_attr, search_base)
+        try:
+            conn = Connection(server, user=user_dn, password=password, auto_bind=True)
+        except LDAPBindError:
+            raise
 
-    entry = conn.entries[0]
+        conn.search(
+            search_base=search_base,
+            search_filter=f"({uid_attr}={escape_filter_chars(username)})",
+            attributes=status_attrs,
+        )
+        if not conn.entries:
+            raise LDAPAuthError("Benutzer nicht gefunden nach Bind")
+        entry = conn.entries[0]
 
     locked_time = getattr(entry, "pwdAccountLockedTime", None)
     if locked_time and locked_time.value:

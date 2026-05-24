@@ -28,7 +28,7 @@ class User(Base):
     preferences          = Column(JSON)
     instance_memberships = relationship("InstanceMember", back_populates="user", foreign_keys="InstanceMember.user_id")
     group_memberships    = relationship("GroupMember", back_populates="user")
-    sessions             = relationship("Session", back_populates="user")
+    sessions             = relationship("Session", back_populates="user", foreign_keys="[Session.user_id]")
 
 
 class Instance(Base):

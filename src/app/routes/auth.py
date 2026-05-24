@@ -14,6 +14,9 @@ from app.db.session import get_db
 from app.dependencies import limiter
 from app.schemas import LoginRequest, LoginResponse, user_out
 from app.services.config_service import get_app_setting, get_ldap_config
+from app.utils.logging_config import setup_logger
+
+logger = setup_logger(__name__)
 
 _SECURE_COOKIES = os.getenv("SECURE_COOKIES", "false").lower() == "true"
 
@@ -53,35 +56,45 @@ async def login(
     else:
         # 2. LDAP authentication
         ldap_cfg = await get_ldap_config(db)
+        ldap_enabled = ldap_cfg.get("ldap_enabled", "true").lower() not in ("false", "0", "off")
         ldap_data = None
-        try:
-            ldap_data = await asyncio.to_thread(authenticate, username, password, ldap_cfg)
-        except LDAPAccountLockedError:
-            error = "Ihr Account ist gesperrt."
-        except LDAPAccountExpiredError:
-            error = "Ihr Account ist abgelaufen."
-        except LDAPBindError:
-            error = "Ungültige Anmeldedaten."
-        except Exception:
-            error = "Anmeldung fehlgeschlagen. Bitte versuchen Sie es erneut."
+        if not ldap_enabled:
+            error = "Anmeldung nicht möglich: LDAP ist deaktiviert."
+        else:
+            try:
+                ldap_data = await asyncio.to_thread(authenticate, username, password, ldap_cfg)
+            except LDAPAccountLockedError:
+                error = "Ihr Account ist gesperrt."
+            except LDAPAccountExpiredError:
+                error = "Ihr Account ist abgelaufen."
+            except LDAPBindError:
+                error = "Ungültige Anmeldedaten."
+            except Exception:
+                logger.exception("LDAP-Authentifizierung fehlgeschlagen für Benutzer '%s'", username)
+                error = "Anmeldung fehlgeschlagen. Bitte versuchen Sie es erneut."
 
         if ldap_data and not error:
             if db_user is None:
-                db_user = User(
-                    ldap_uid=ldap_data["uid"],
-                    display_name=ldap_data["display_name"],
-                    email=ldap_data["email"],
-                    is_global_admin=ldap_data["ldap_is_admin"],
-                    is_active=True,
-                )
-                db.add(db_user)
+                allow_auto = ldap_cfg.get("ldap_allow_auto_registration", "true").lower() not in ("false", "0", "off")
+                if not allow_auto:
+                    error = "Ihr Account wurde noch nicht durch einen Administrator angelegt."
+                else:
+                    db_user = User(
+                        ldap_uid=ldap_data["uid"],
+                        display_name=ldap_data["display_name"],
+                        email=ldap_data["email"],
+                        is_global_admin=ldap_data["ldap_is_admin"],
+                        is_active=True,
+                    )
+                    db.add(db_user)
             else:
                 if not db_user.is_active:
                     error = "Ihr Account wurde deaktiviert."
                 else:
                     db_user.display_name = ldap_data["display_name"]
                     db_user.email = ldap_data["email"]
-                    db_user.is_global_admin = ldap_data["ldap_is_admin"]
+                    if ldap_cfg.get("ldap_admin_group_dn"):
+                        db_user.is_global_admin = ldap_data["ldap_is_admin"]
                     db_user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
             if not error:
                 await db.commit()
@@ -89,6 +102,17 @@ async def login(
                 user = db_user
 
     if error or not user:
+        try:
+            from app.db.models import AuditLog
+            db.add(AuditLog(
+                user_id=db_user.id if db_user else None,
+                action="login_failed",
+                ip_address=_get_ip(request),
+                detail={"username": username},
+            ))
+            await db.commit()
+        except Exception:
+            pass
         return JSONResponse({"detail": error or "Ungültige Anmeldedaten."}, status_code=401)
 
     # Audit log
