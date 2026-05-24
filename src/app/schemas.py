@@ -40,7 +40,7 @@ class UserOut(BaseModel):
 
 class UserPatchRequest(BaseModel):
     default_instance_id: int | None = None
-    preferences: dict | None = None
+    preferences: UserPreferences | None = None
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -96,6 +96,18 @@ class InstancePatchRequest(BaseModel):
     description: str | None = None
     settings: dict | None = None
     clear_settings: bool = False
+
+
+class InstanceMemberOut(BaseModel):
+    user_id: int
+    ldap_uid: str
+    display_name: str | None = None
+    role: str
+
+
+class AddInstanceMemberRequest(BaseModel):
+    user_id: int
+    role: str  # "viewer" | "manager"
 
 
 # ─── Chat ─────────────────────────────────────────────────────────────────────
@@ -238,6 +250,7 @@ class SettingSpec(BaseModel):
     max: float | None = None
     step: float | None = None
     hint: str | None = None
+    description: str | None = None
 
 
 class SettingsPatchRequest(BaseModel):
@@ -263,6 +276,7 @@ class LDAPConfigOut(BaseModel):
     ldap_bind_dn: str
     ldap_bind_password_set: bool
     ldap_enabled: bool
+    ldap_allow_auto_registration: bool
 
 
 class LDAPConfigIn(BaseModel):
@@ -276,6 +290,20 @@ class LDAPConfigIn(BaseModel):
     ldap_bind_dn: str = ""
     ldap_bind_password: str | None = None  # None = don't change
     ldap_enabled: bool = True
+    ldap_allow_auto_registration: bool = True
+
+
+class AdminUserCreateRequest(BaseModel):
+    ldap_uid: str
+    display_name: str | None = None
+    email: str | None = None
+    is_global_admin: bool = False
+
+
+class LDAPSearchResult(BaseModel):
+    ldap_uid: str
+    display_name: str | None = None
+    email: str | None = None
 
 
 # ─── Admin – Audit ────────────────────────────────────────────────────────────

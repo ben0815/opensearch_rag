@@ -19,8 +19,7 @@ logger = setup_logger(__name__)
 _llm_cache: dict[str, OllamaLLM] = {}
 _llm_cache_lock = threading.Lock()
 
-_PROMPT_TEMPLATE = PromptTemplate(
-    template="""/no_think Du bist ein präziser Assistent. Beantworte die Frage ausschließlich \
+DEFAULT_SYSTEM_PROMPT = """/no_think Du bist ein präziser Assistent. Beantworte die Frage ausschließlich \
 auf Basis der folgenden Kontext-Abschnitte aus den Dokumenten. Antworte ausschließlich auf Deutsch.
 
 Wenn die Antwort nicht im Kontext enthalten ist, antworte exakt:
@@ -33,9 +32,46 @@ Kontext:
 
 Frage: {question}
 
-Antwort:""",
+Antwort:"""
+
+_REQUIRED_PLACEHOLDERS = ("{context}", "{question}", "{history}")
+
+_PROMPT_TEMPLATE = PromptTemplate(
+    template=DEFAULT_SYSTEM_PROMPT,
     input_variables=["context", "question", "history"],
 )
+
+
+def _build_prompt_template(custom_prompt: str) -> PromptTemplate:
+    """Build a PromptTemplate from a custom prompt string.
+
+    Falls back to the built-in default if the string is empty or missing
+    required placeholders. Logs a warning in the fallback case.
+    """
+    if not custom_prompt or not custom_prompt.strip():
+        return _PROMPT_TEMPLATE
+    missing = [p for p in _REQUIRED_PLACEHOLDERS if p not in custom_prompt]
+    if missing:
+        logger.warning(
+            "System-Prompt ignoriert: fehlende Platzhalter %s — verwende eingebauten Standard",
+            missing,
+        )
+        return _PROMPT_TEMPLATE
+    try:
+        return PromptTemplate(
+            template=custom_prompt,
+            input_variables=["context", "question", "history"],
+        )
+    except Exception:
+        logger.exception("System-Prompt konnte nicht geparst werden — verwende eingebauten Standard")
+        return _PROMPT_TEMPLATE
+
+
+def validate_system_prompt(prompt: str) -> list[str]:
+    """Return a list of missing required placeholder names (empty = valid)."""
+    if not prompt or not prompt.strip():
+        return []
+    return [p for p in _REQUIRED_PLACEHOLDERS if p not in prompt]
 
 
 def _format_history(history) -> str:
@@ -116,13 +152,14 @@ def generate_stream(
 
     context = '\n\n'.join([doc.page_content for doc in docs])
     history_text = _format_history(history)
+    prompt_template = _build_prompt_template(getattr(config, "llm_system_prompt", ""))
     chain = (
         {
             'context': lambda x: context,
             'question': RunnablePassthrough(),
             'history': lambda x: history_text,
         }
-        | _PROMPT_TEMPLATE
+        | prompt_template
         | get_llm(config)
         | StrOutputParser()
     )

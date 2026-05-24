@@ -17,6 +17,7 @@ _INSTANCE_OVERRIDABLE = {
     "llm_num_ctx": int,
     "hybrid_k": int,
     "hybrid_score_threshold": float,
+    "llm_system_prompt": str,
 }
 
 
@@ -80,7 +81,7 @@ _LDAP_SETTING_KEYS = (
     "ldap_url", "ldap_user_search_base", "ldap_uid_attr",
     "ldap_display_name_attr", "ldap_mail_attr", "ldap_user_filter",
     "ldap_admin_group_dn", "ldap_bind_dn", "ldap_bind_password",
-    "ldap_enabled",
+    "ldap_enabled", "ldap_allow_auto_registration",
 )
 
 
@@ -96,6 +97,7 @@ def _get_ldap_env_defaults() -> dict:
         "ldap_bind_dn": os.getenv("LDAP_BIND_DN", ""),
         "ldap_bind_password": os.getenv("LDAP_BIND_PASSWORD", ""),
         "ldap_enabled": os.getenv("LDAP_ENABLED", "true"),
+        "ldap_allow_auto_registration": os.getenv("LDAP_ALLOW_AUTO_REGISTRATION", "true"),
     }
 
 

@@ -51,3 +51,5 @@ class LoaderConfig:
         self.llm_num_ctx = int(os.getenv('LLM_NUM_CTX', '16384'))
         self.llm_temperature = float(os.getenv('LLM_TEMPERATURE', '0.0'))
         self.llm_timeout_seconds = int(os.getenv('LLM_TIMEOUT_SECONDS', '240'))
+        # Custom system prompt — empty string = use built-in default in rag.py
+        self.llm_system_prompt: str = ""
