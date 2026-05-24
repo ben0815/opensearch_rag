@@ -1,0 +1,22 @@
+# Entwicklungs-Overrides — wird von Docker Compose automatisch eingelesen
+# wenn diese Datei im selben Verzeichnis wie docker-compose.yml liegt.
+#
+# Diese Mounts ermöglichen Live-Reload ohne Image-Rebuild:
+#   - Python-Änderungen in src/app/ sofort aktiv (uvicorn --reload)
+#   - Alembic-Migrationen direkt ausführbar
+#
+# WICHTIG: src/frontend/dist/ muss einmalig gebaut werden, bevor die App
+# das React-Frontend ausliefern kann:
+#   cd ../src/frontend && npm install && npm run build
+#
+# Für Produktion (oder einen sauberen Image-Build-Test) diese Datei
+# umbenennen oder löschen: mv docker-compose.override.yml docker-compose.override.yml.bak
+
+services:
+  app:
+    environment:
+      - DEV_MODE=false
+    volumes:
+      - ../src:/app/src
+      - ../alembic:/app/alembic
+      - ../alembic.ini:/app/alembic.ini

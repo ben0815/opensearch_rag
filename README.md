@@ -33,15 +33,22 @@ ollama pull qwen3.5:35b         # LLM — 35B Parameter, nur 3B aktiv (MoE), emp
 # 1. Konfiguration anlegen
 cp infra/.env.example infra/.env
 # infra/.env nach Bedarf anpassen (Passwörter, Modellnamen, LDAP-URL …)
+# Mindestpflicht: APP_SECRET_KEY auf einen zufälligen Wert setzen:
+#   python -c "import secrets; print(secrets.token_hex(32))"
 
-# 2. Stack starten
-cd infra && docker compose up -d
+# 2. Stack bauen und starten (Dockerfile baut das React-Frontend automatisch mit)
+cd infra && docker compose up -d --build
 
 # 3. Ersten Admin anlegen
 docker exec -it app python -m app.cli.admin create-admin <benutzername> <passwort>
 ```
 
 Die Web-App ist danach unter **http://localhost:8081** erreichbar.
+
+> **Hinweis für Entwickler**: Die Datei `infra/docker-compose.override.yml` (im Repository enthalten) aktiviert automatisch Source-Mounts, sodass Python-Änderungen ohne Image-Rebuild wirksam sind. Da der Mount `src/` die im Image gebaute Frontend-Version überdeckt, muss das Frontend einmalig lokal gebaut werden:
+> ```bash
+> cd src/frontend && npm install && npm run build
+> ```
 
 ## Konfiguration
 
@@ -82,7 +89,10 @@ Alle Variablen werden in `infra/.env` gesetzt (Vorlage: `infra/.env.example`). I
 | `REDIS_PASSWORD` | _(leer)_ | Redis-Passwort (leer = kein Passwort; in Produktion setzen) |
 | `SECURE_COOKIES` | `false` | Cookies auf HTTPS-only setzen (nur mit TLS-Termination) |
 | `APP_SECRET_KEY` | _(Pflicht)_ | Geheimer Schlüssel für CSRF-Token-Signierung. Generieren: `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `ENCRYPTION_KEY` | _(leer)_ | Fernet-Schlüssel für verschlüsselte Ablage des LDAP-Bind-Passworts in der DB. Leer = kein Schutz. Generieren: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `CSRF_ENFORCE` | `true` | `false` = CSRF-Fehler nur loggen, nicht blockieren (schrittweise Einführung) |
+| `LDAP_ENABLED` | `false` | `true` = LDAP-Login aktiv. Bei `false` ist nur der lokale bcrypt-Admin (CLI) nutzbar. |
+| `DEV_MODE` | `false` | `true` = CORS für Vite-Dev-Server (Port 5173) aktivieren. Nur für lokale Entwicklung. |
 | `APP_BIND_HOST` | `0.0.0.0` | Bind-Adresse des App-Ports auf dem Host. `0.0.0.0` = von allen Rechnern im Netz erreichbar (Entwicklung). In Produktion mit Caddy auf `127.0.0.1` setzen. |
 
 ---
@@ -359,34 +369,69 @@ docker compose -f infra/docker-compose.yml logs -f app
 docker compose -f infra/docker-compose.yml logs -f opensearch
 ```
 
-## Lokale Entwicklung (ohne Docker)
+## Lokale Entwicklung
+
+### Backend (FastAPI mit Hot-Reload)
 
 ```bash
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
-# infra/.env muss existieren
+# infra/.env muss existieren, DEV_MODE=true setzen
+alembic upgrade head
 uvicorn app.app_fastapi:app --reload --port 8081
 ```
 
 Voraussetzung: OpenSearch, Redis und PostgreSQL laufen (z. B. per `docker compose up opensearch redis postgres -d`).
 
+### Frontend (Vite Dev-Server mit Proxy)
+
+```bash
+cd src/frontend
+npm install
+npm run dev    # Startet auf Port 5173, leitet /api automatisch an Port 8081 weiter
+```
+
+`DEV_MODE=true` in `infra/.env` aktiviert CORS für Port 5173.
+
+### Mit Docker (Source-Mounts, kein Rebuild bei Python-Änderungen)
+
+Die Datei `infra/docker-compose.override.yml` aktiviert automatisch Source-Mounts. Einmalig das Frontend bauen, dann Container starten:
+
+```bash
+cd src/frontend && npm install && npm run build && cd ../../infra
+docker compose up -d --build
+```
+
 ## Architektur
 
 ```
-Browser
-  │
+Browser (React SPA — src/frontend/)
+  │  Fetch /api/* mit X-CSRF-Token-Header + credentials: include
   ▼
 FastAPI (app_fastapi.py)
-  ├── CsrfMiddleware      — Double-Submit-Cookie; 403 bei fehlgültigem Token (unsafe Methods)
-  ├── AuthMiddleware      — Session-Token aus Cookie; Redirect → /login
-  ├── /login /logout      — LDAP-Bind oder lokaler bcrypt-Check
-  ├── /chat /chat/stream  — SSE-Streaming: sources → tokens → done
-  ├── /documents /upload  — SSE-Fortschritt, chunked Datei-Lesen
-  └── /admin              — Instanzen, Gruppen, Benutzer (paginiert)
+  ├── SecurityHeadersMiddleware  — CSP, X-Content-Type-Options, …
+  ├── CsrfMiddleware             — Double-Submit-Cookie (HMAC-SHA256); 403 bei ungültigem Token
+  ├── AuthMiddleware             — Session-Cookie → 401 JSON bei fehlender/abgelaufener Session
+  │
+  ├── POST /api/auth/login       — LDAP-Bind oder lokaler bcrypt-Check → Session-Cookie
+  ├── POST /api/auth/logout
+  ├── GET  /api/auth/me
+  │
+  ├── GET  /api/instances        — Instanzen des eingeloggten Benutzers
+  ├── POST /api/chat/stream      — SSE: event:sources → data:token … → event:done (history_id)
+  ├── GET/DELETE /api/chat/history*
+  │
+  ├── GET  /api/documents/{id}   — Dokumentenliste einer Instanz
+  ├── POST /api/documents/{id}/upload  — SSE-Fortschritt pro Datei
+  ├── DELETE /api/documents/{id}/{hash}
+  │
+  └── /api/admin/*               — Users, Instances, Groups, Settings, LDAP, Status, Audit
          │
-         ├── PostgreSQL   — User, Instance, Group, Session, ChatHistory
+         ├── PostgreSQL   — User, Instance, Group, Session, ChatHistory, AuditLog, AppSetting
          ├── Redis         — DocumentMetadata als JSON (doc:{slug}:{sha256})
          └── OpenSearch    — documents_{slug}: knn_vector + text (BM25)
                                 └── Hybrid Pipeline: min_max + arithmetic_mean
+
+  GET /{alles andere}            — index.html (React Router übernimmt client-seitiges Routing)
 ```
