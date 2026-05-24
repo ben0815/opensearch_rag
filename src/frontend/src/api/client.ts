@@ -1,14 +1,16 @@
 import type {
+  AdminUserCreateRequest,
   AdminUserOut,
-  ChatHistoryOut,
   DocumentOut,
   GroupOut,
   InstanceAdminOut,
   InstanceCreateRequest,
+  InstanceMemberOut,
   InstanceOut,
   InstancePatchRequest,
   LDAPConfigIn,
   LDAPConfigOut,
+  LDAPSearchResult,
   LoginRequest,
   LoginResponse,
   PaginatedAdminUsers,
@@ -75,6 +77,7 @@ async function request<T>(
 const get = <T>(path: string, signal?: AbortSignal) => request<T>("GET", path, undefined, signal);
 const post = <T>(path: string, body?: unknown, signal?: AbortSignal) =>
   request<T>("POST", path, body, signal);
+const put = <T>(path: string, body?: unknown) => request<T>("PUT", path, body);
 const patch = <T>(path: string, body?: unknown) => request<T>("PATCH", path, body);
 const del = (path: string) => request<void>("DELETE", path);
 
@@ -104,7 +107,6 @@ export const chat = {
     if (params?.instance_id) q.set("instance_id", String(params.instance_id));
     return get<PaginatedChatHistory>(`/api/chat/history?${q}`);
   },
-  historyItem: (id: number) => get<ChatHistoryOut>(`/api/chat/history/${id}`),
   patchHistory: (id: number, data: { duration_s?: number; ttft_s?: number }) =>
     patch<void>(`/api/chat/history/${id}`, data),
   deleteHistory: (id: number) => del(`/api/chat/history/${id}`),
@@ -124,29 +126,17 @@ export const documents = {
 // ─── Admin – Instances ────────────────────────────────────────────────────────
 
 export const adminInstances = {
-  list: (params?: { page?: number; per_page?: number }) => {
-    const q = new URLSearchParams();
-    if (params?.page) q.set("page", String(params.page));
-    if (params?.per_page) q.set("per_page", String(params.per_page));
-    return get<{ items: InstanceAdminOut[]; total: number; page: number; total_pages: number }>(
-      `/api/admin/instances?${q}`,
-    );
-  },
+  list: () => get<InstanceAdminOut[]>("/api/admin/instances"),
   get: (id: number) => get<InstanceAdminOut>(`/api/admin/instances/${id}`),
   create: (data: InstanceCreateRequest) => post<InstanceAdminOut>("/api/admin/instances", data),
   patch: (id: number, data: InstancePatchRequest) =>
     patch<InstanceAdminOut>(`/api/admin/instances/${id}`, data),
   delete: (id: number) => del(`/api/admin/instances/${id}`),
-  members: (id: number) =>
-    get<Array<{ user_id: number; ldap_uid: string; display_name: string | null; role: string }>>(
-      `/api/admin/instances/${id}/members`,
-    ),
+  members: (id: number) => get<InstanceMemberOut[]>(`/api/admin/instances/${id}/members`),
   addMember: (id: number, data: { user_id: number; role: string }) =>
     post<void>(`/api/admin/instances/${id}/members`, data),
   removeMember: (id: number, userId: number) =>
     del(`/api/admin/instances/${id}/members/${userId}`),
-  patchMember: (id: number, userId: number, data: { role: string }) =>
-    patch<void>(`/api/admin/instances/${id}/members/${userId}`, data),
 };
 
 // ─── Admin – Users ────────────────────────────────────────────────────────────
@@ -156,10 +146,10 @@ export const adminUsers = {
     const q = new URLSearchParams();
     if (params?.page) q.set("page", String(params.page));
     if (params?.per_page) q.set("per_page", String(params.per_page));
-    if (params?.search) q.set("search", params.search);
+    if (params?.search) q.set("q", params.search);
     return get<PaginatedAdminUsers>(`/api/admin/users?${q}`);
   },
-  get: (id: number) => get<AdminUserOut>(`/api/admin/users/${id}`),
+  create: (data: AdminUserCreateRequest) => post<AdminUserOut>("/api/admin/users", data),
   patch: (id: number, data: { is_global_admin?: boolean; is_active?: boolean }) =>
     patch<AdminUserOut>(`/api/admin/users/${id}`, data),
   delete: (id: number) => del(`/api/admin/users/${id}`),
@@ -171,7 +161,7 @@ export const adminUsers = {
     post<void>(`/api/admin/users/${id}/groups`, data),
   removeGroup: (id: number, groupId: number) =>
     del(`/api/admin/users/${id}/groups/${groupId}`),
-  impersonate: (id: number) => post<{ token: string }>(`/api/admin/users/${id}/impersonate`),
+  impersonate: (id: number) => post<UserOut>(`/api/admin/users/${id}/impersonate`),
 };
 
 // ─── Admin – Groups ───────────────────────────────────────────────────────────
@@ -183,7 +173,6 @@ export const adminGroups = {
     if (params?.per_page) q.set("per_page", String(params.per_page));
     return get<PaginatedGroups>(`/api/admin/groups?${q}`);
   },
-  get: (id: number) => get<GroupOut>(`/api/admin/groups/${id}`),
   create: (data: { name: string; ldap_group_dn?: string }) =>
     post<GroupOut>("/api/admin/groups", data),
   delete: (id: number) => del(`/api/admin/groups/${id}`),
@@ -209,9 +198,10 @@ export const adminSettings = {
 
 export const adminLdap = {
   get: () => get<LDAPConfigOut>("/api/admin/ldap"),
-  save: (data: LDAPConfigIn) => post<LDAPConfigOut>("/api/admin/ldap", data),
+  save: (data: LDAPConfigIn) => put<LDAPConfigOut>("/api/admin/ldap", data),
   test: () => post<{ ok: boolean; error: string | null }>("/api/admin/ldap/test"),
   sync: () => post<{ synced: number; errors: number }>("/api/admin/ldap/sync"),
+  search: (query: string) => post<LDAPSearchResult[]>("/api/admin/ldap/search", { query }),
 };
 
 // ─── Admin – Status ───────────────────────────────────────────────────────────

@@ -26,6 +26,9 @@ export default function AdminMaintenancePage() {
   useEffect(() => { void load(); }, [load]);
 
   async function handleToggle() {
+    if (!active) {
+      if (!confirm("Wartungsmodus aktivieren? Alle Nicht-Admins werden gesperrt.")) return;
+    }
     setSaving(true);
     setError(null);
     try {

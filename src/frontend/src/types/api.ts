@@ -56,6 +56,13 @@ export interface InstanceAdminOut {
   doc_count: number;
 }
 
+export interface InstanceMemberOut {
+  user_id: number;
+  ldap_uid: string;
+  display_name: string | null;
+  role: string;
+}
+
 export interface InstanceCreateRequest {
   name: string;
   description?: string;
@@ -113,6 +120,13 @@ export type UploadProgressEvent =
   | { done: true; total: number };
 
 // ─── Admin – Users ────────────────────────────────────────────────────────────
+
+export interface AdminUserCreateRequest {
+  ldap_uid: string;
+  display_name?: string | null;
+  email?: string | null;
+  is_global_admin?: boolean;
+}
 
 export interface AdminUserOut {
   id: number;
@@ -175,6 +189,7 @@ export interface SettingSpec {
   max?: number;
   step?: number;
   hint?: string;
+  description?: string | null;
 }
 
 export interface SettingsResponse {
@@ -196,6 +211,7 @@ export interface LDAPConfigIn {
   ldap_bind_dn?: string;
   ldap_bind_password?: string | null;
   ldap_enabled?: boolean;
+  ldap_allow_auto_registration?: boolean;
 }
 
 export interface LDAPConfigOut {
@@ -209,6 +225,13 @@ export interface LDAPConfigOut {
   ldap_bind_dn: string;
   ldap_bind_password_set: boolean;
   ldap_enabled: boolean;
+  ldap_allow_auto_registration: boolean;
+}
+
+export interface LDAPSearchResult {
+  ldap_uid: string;
+  display_name: string | null;
+  email: string | null;
 }
 
 // ─── Admin – Audit ────────────────────────────────────────────────────────────
@@ -233,32 +256,27 @@ export interface PaginatedAuditLog {
 
 // ─── Admin – Status ───────────────────────────────────────────────────────────
 
-export interface ServiceStatus {
-  ok: boolean;
-  error: string | null;
-  extra: Record<string, unknown>;
-}
-
 export interface StatusOut {
   app_version: string;
-  opensearch: ServiceStatus;
-  ollama: ServiceStatus;
-  redis: ServiceStatus;
-  postgres: ServiceStatus;
+  opensearch: Record<string, unknown>;
+  ollama: Record<string, unknown>;
+  redis: Record<string, unknown>;
+  postgres: Record<string, unknown>;
 }
 
 // ─── SSE Chat ─────────────────────────────────────────────────────────────────
 
 export interface SourceChunk {
   source: string;
-  page: number;
+  filename: string;
+  page: number | null;
   score: number;
-  text: string;
+  excerpt: string;
 }
 
 export interface ChatDoneEvent {
   history_id: number;
   answer: string;
-  retrieval_ms: number;
+  retrieval_ms?: number;
   llm_generation_s: number;
 }

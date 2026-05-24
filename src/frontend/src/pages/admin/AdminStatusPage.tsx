@@ -1,22 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
-import { Badge, Button, Card, Col, Row, Spinner } from "react-bootstrap";
+import { Alert, Badge, Button, Card, Col, Row, Spinner } from "react-bootstrap";
 import { useTranslation } from "react-i18next";
 import { adminStatus } from "@/api/client";
 import type { StatusOut } from "@/types/api";
 
-function StatusCard({ label, status }: { label: string; status: { ok: boolean; error: string | null; extra: Record<string, unknown> } }) {
+function StatusCard({ label, status }: { label: string; status: Record<string, unknown> }) {
+  const ok = Boolean(status.ok);
+  const error = status.error as string | undefined;
+  const extras = Object.entries(status).filter(([k]) => k !== "ok" && k !== "error");
+
   return (
-    <Card className={`border-${status.ok ? "success" : "danger"}`}>
+    <Card className={`border-${ok ? "success" : "danger"}`}>
       <Card.Body>
         <div className="d-flex align-items-center justify-content-between mb-2">
           <Card.Title className="mb-0">{label}</Card.Title>
-          <Badge bg={status.ok ? "success" : "danger"}>{status.ok ? "OK" : "Fehler"}</Badge>
+          <Badge bg={ok ? "success" : "danger"}>{ok ? "OK" : "Fehler"}</Badge>
         </div>
-        {status.error && <p className="text-danger small mb-1">{status.error}</p>}
-        {Object.entries(status.extra).map(([k, v]) => (
+        {error && <p className="text-danger small mb-1">{error}</p>}
+        {extras.map(([k, v]) => (
           <div key={k} className="small text-body-secondary">
             <span className="fw-semibold me-1">{k}:</span>
-            {String(v)}
+            {Array.isArray(v) ? (v as string[]).join(", ") : String(v)}
           </div>
         ))}
       </Card.Body>
@@ -28,15 +32,19 @@ export default function AdminStatusPage() {
   const { t } = useTranslation();
   const [data, setData] = useState<StatusOut | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       setData(await adminStatus.get());
+    } catch {
+      setError(t("errors.serverError"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -52,6 +60,8 @@ export default function AdminStatusPage() {
       {data && (
         <div className="mb-3 text-body-secondary small">Version: {data.app_version}</div>
       )}
+
+      {error && <Alert variant="danger" dismissible onClose={() => setError(null)}>{error}</Alert>}
 
       {loading && !data ? (
         <div className="text-center py-5"><Spinner animation="border" /></div>

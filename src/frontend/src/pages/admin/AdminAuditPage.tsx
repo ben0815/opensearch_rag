@@ -14,6 +14,20 @@ const ACTION_COLORS: Record<string, string> = {
   doc_delete: "danger",
   instance_create: "info",
   instance_delete: "danger",
+  instance_patch: "secondary",
+  instance_member_add: "info",
+  instance_member_remove: "warning",
+  group_create: "info",
+  group_delete: "danger",
+  user_pre_create: "info",
+  user_patch: "warning",
+  user_delete: "danger",
+  settings_change: "warning",
+  ldap_config_change: "warning",
+  ldap_sync: "secondary",
+  impersonation_start: "danger",
+  impersonation_stop: "secondary",
+  maintenance_mode_change: "warning",
 };
 
 export default function AdminAuditPage() {
