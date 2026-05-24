@@ -12,6 +12,17 @@
   if (uploadForm) {
     uploadForm.addEventListener("submit", uploadFiles);
   }
+
+  const docFilter = document.getElementById("doc-filter");
+  if (docFilter) {
+    docFilter.addEventListener("input", function () {
+      var q = this.value.toLowerCase();
+      document.querySelectorAll("#doc-table tbody tr").forEach(function (row) {
+        var name = row.querySelector("td")?.textContent.toLowerCase() || "";
+        row.style.display = name.includes(q) ? "" : "none";
+      });
+    });
+  }
 })();
 
 function uploadFiles(e) {
@@ -58,7 +69,7 @@ function uploadFiles(e) {
     progress.innerHTML += `<div class="text-danger">Verbindungsfehler: ${err.message}</div>`;
   }
 
-  fetch("/documents/upload", { method: "POST", body: fd })
+  fetch("/documents/upload", { method: "POST", body: fd, headers: { "X-CSRF-Token": getCsrfToken() } })
     .then(function (response) {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const reader = response.body.getReader();

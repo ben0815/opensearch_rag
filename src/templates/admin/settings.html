@@ -9,11 +9,7 @@
   </div>
 </div>
 
-{% if saved %}
-<div class="alert alert-success alert-dismissible">Einstellungen gespeichert.
-  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-</div>
-{% elif error %}
+{% if error %}
 <div class="alert alert-danger alert-dismissible">{{ error }}
   <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
 </div>
@@ -25,6 +21,7 @@
       <div class="card-header">LLM &amp; Suche</div>
       <div class="card-body">
         <form method="post" action="/admin/settings">
+          {{ csrf_input(request) }}
           <table class="table table-sm align-middle">
             <thead>
               <tr>
@@ -45,9 +42,10 @@
                   name="{{ s.key }}"
                   value="{{ config[s.key] }}"
                   class="form-control form-control-sm"
-                  {% if s.min is not none %}min="{{ s.min }}"{% endif %}
-                  {% if s.max is not none %}max="{{ s.max }}"{% endif %}
-                  {% if s.step is not none %}step="{{ s.step }}"{% endif %}
+                  {% if s.inputmode %}inputmode="{{ s.inputmode }}" data-decimal-input{% endif %}
+                  {% if s.type == "number" and s.min is not none %}min="{{ s.min }}"{% endif %}
+                  {% if s.type == "number" and s.max is not none %}max="{{ s.max }}"{% endif %}
+                  {% if s.type == "number" and s.step is not none %}step="{{ s.step }}"{% endif %}
                 >
               </td>
               <td class="text-muted small">{{ s.hint }}</td>
@@ -97,7 +95,7 @@
           <li>Änderungen werden sofort übernommen — kein Neustart nötig.</li>
           <li>LLM-Modell-Änderungen löschen den Modell-Cache.</li>
           <li>Suche-Änderungen aktualisieren die OpenSearch-Pipeline aller Instanzen.</li>
-          <li>BM25 + kNN ergeben immer 1,0 (kNN wird automatisch berechnet).</li>
+          <li>BM25 + kNN ergeben immer 1.0 (kNN wird automatisch berechnet).</li>
           <li>Instanz-spezifische Einstellungen überschreiben globale Werte.</li>
         </ul>
       </div>

@@ -10,13 +10,15 @@
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="/static/js/common.js?v={{ js_version }}"></script>
+  <meta name="csrf-token" content="{{ request.state.csrf_token | default('') }}">
 </head>
 <body>
   {% if request.state.user is defined and request.state.user %}
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3">
     <span class="navbar-brand">RAG</span>
     <div class="navbar-nav me-auto">
-      <a class="nav-link {% if request.url.path.startswith('/chat') %}active{% endif %}" href="/chat">Chat</a>
+      <a class="nav-link {% if request.url.path == '/chat' %}active{% endif %}" href="/chat">Chat</a>
+      <a class="nav-link {% if request.url.path.startswith('/chat/history') %}active{% endif %}" href="/chat/history">Verlauf</a>
       <a class="nav-link {% if request.url.path.startswith('/documents') %}active{% endif %}" href="/documents">Dokumente</a>
       {% if request.state.user.is_global_admin %}
       <a class="nav-link {% if request.url.path.startswith('/admin') %}active{% endif %}" href="/admin">Verwaltung</a>
@@ -32,6 +34,14 @@
       <a class="nav-link ms-1" href="/logout">Abmelden</a>
     </div>
   </nav>
+  {% endif %}
+  {% if flash %}
+  <div class="container-fluid pt-2">
+    <div class="alert alert-{{ flash.category }} alert-dismissible fade show mb-0" role="alert">
+      {{ flash.message | e }}
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Schließen"></button>
+    </div>
+  </div>
   {% endif %}
   <div class="container-fluid mt-3">
     {% block content %}{% endblock %}

@@ -35,3 +35,10 @@ infra/logs/*
 # ideen
 ideen.md
 konzept_*.md
+# Frontend
+src/frontend/node_modules/
+src/frontend/dist/
+src/frontend/*.tsbuildinfo
+src/frontend/vite.config.d.ts
+src/frontend/vite.config.js
+src/frontend/package-lock.json

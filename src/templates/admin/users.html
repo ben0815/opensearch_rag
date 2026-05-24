@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Benutzer{% endblock %}
 {% block content %}
+{% macro sort_th(label, field, cls="") %}
+  {% set next_order = "desc" if sort == field and order == "asc" else "asc" %}
+  <th{% if cls %} class="{{ cls }}"{% endif %}>
+    <a href="?sort={{ field }}&order={{ next_order }}&q={{ q | url_encode }}"
+       class="text-decoration-none text-reset">
+      {{ label }}
+      {% if sort == field %}{{ "↑" if order == "asc" else "↓" }}{% else %}<span class="text-muted">↕</span>{% endif %}
+    </a>
+  </th>
+{% endmacro %}
 <div class="d-flex align-items-center gap-3 mb-3">
   <h5 class="mb-0">Benutzer</h5>
   <form method="get" action="/admin/users" class="d-flex gap-2 ms-3">
@@ -29,14 +39,14 @@
   <table class="table table-sm table-hover align-middle">
     <thead>
       <tr>
-        <th>Benutzername</th>
-        <th>Name</th>
+        {{ sort_th("Benutzername", "ldap_uid") }}
+        {{ sort_th("Name", "display_name") }}
         <th>E-Mail</th>
         <th>Admin</th>
         <th>Status</th>
-        <th>Gruppen</th>
+        <th class="d-none d-lg-table-cell">Gruppen</th>
         <th>Instanz-Zuweisungen</th>
-        <th>Erstellt / Login</th>
+        {{ sort_th("Erstellt / Login", "created_at", "d-none d-xl-table-cell") }}
         <th></th>
       </tr>
     </thead>
@@ -59,6 +69,7 @@
         </span>
         {% else %}
         <form method="post" action="/admin/users/{{ u.id }}/set-admin" class="d-inline">
+          {{ csrf_input(request) }}
           <input type="hidden" name="is_admin" value="{{ "false" if u.is_global_admin else "true" }}">
           {% if u.is_global_admin %}
           <button type="submit" class="btn btn-sm btn-warning"
@@ -84,6 +95,7 @@
         {% if u.is_active is defined and not u.is_active %}
         <span class="badge bg-danger">Deaktiviert</span>
         <form method="post" action="/admin/users/{{ u.id }}/set-active" class="d-inline ms-1">
+          {{ csrf_input(request) }}
           <input type="hidden" name="is_active" value="true">
           <button type="submit" class="btn btn-sm btn-outline-success">Aktivieren</button>
         </form>
@@ -92,13 +104,14 @@
         {% if u.id != request.state.user.id %}
         <form method="post" action="/admin/users/{{ u.id }}/set-active" class="d-inline ms-1"
           data-confirm="Benutzer '{{ u.ldap_uid }}' deaktivieren? Der Benutzer kann sich danach nicht mehr anmelden. Bestehende Sessions laufen noch bis zu ihrem Ablauf weiter.">
+          {{ csrf_input(request) }}
           <input type="hidden" name="is_active" value="false">
           <button type="submit" class="btn btn-sm btn-outline-warning">Deaktivieren</button>
         </form>
         {% endif %}
         {% endif %}
       </td>
-      <td>
+      <td class="d-none d-lg-table-cell">
         {% for gname in groups_by_user.get(u.id, []) %}
         <span class="badge bg-secondary me-1">{{ gname }}</span>
         {% endfor %}
@@ -110,12 +123,14 @@
           <span class="badge bg-primary">{{ entry.instance.name }}</span>
           <span class="text-muted small">{{ entry.role }}</span>
           <form method="post" action="/admin/users/{{ u.id }}/remove-instance/{{ entry.instance.id }}">
+            {{ csrf_input(request) }}
             <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1">×</button>
           </form>
         </div>
         {% endfor %}
         <form method="post" action="/admin/users/{{ u.id }}/assign-instance"
           class="row g-1 mt-1">
+          {{ csrf_input(request) }}
           <div class="col-auto">
             <select name="instance_id" class="form-select form-select-sm" required>
               <option value="" disabled selected>Instanz…</option>
@@ -135,7 +150,7 @@
           </div>
         </form>
       </td>
-      <td class="text-muted small" style="white-space:nowrap">
+      <td class="text-muted small d-none d-xl-table-cell" style="white-space:nowrap">
         {% if u.created_at %}<div>{{ u.created_at.strftime('%d.%m.%Y') }}</div>{% endif %}
         {% if u.last_login %}<div class="text-muted">Login: {{ u.last_login.strftime('%d.%m.%Y') }}</div>{% endif %}
       </td>
@@ -143,6 +158,7 @@
         {% if u.id != request.state.user.id %}
         <form method="post" action="/admin/users/{{ u.id }}/delete"
           data-confirm="Benutzer '{{ u.ldap_uid }}' und alle seine Daten (Verlauf, Sessions, Zuweisungen) wirklich löschen? LDAP-Nutzer können sich danach erneut anmelden und erhalten einen leeren neuen Account. Diese Aktion ist nicht rückgängig zu machen.">
+          {{ csrf_input(request) }}
           <button type="submit" class="btn btn-outline-danger btn-sm">Löschen</button>
         </form>
         {% else %}
@@ -152,13 +168,13 @@
     </tr>
     {% else %}
     <tr>
-      <td colspan="9" class="text-muted text-center">Keine Benutzer vorhanden.</td>
+      <td colspan="9" class="text-muted text-center py-4">
+        Keine Benutzer gefunden.{% if q %} Suchbegriff ändern oder <a href="/admin/users">Filter zurücksetzen</a>.{% endif %}
+      </td>
     </tr>
     {% endfor %}
     </tbody>
   </table>
 </div>
-{% with extra_params = {"q": q} if q else {} %}
-  {% include "admin/_pagination.html" %}
-{% endwith %}
+{% include "admin/_pagination.html" %}
 {% endblock %}

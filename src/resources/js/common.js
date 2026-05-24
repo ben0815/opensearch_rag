@@ -19,6 +19,11 @@
 
 // ── Gemeinsame Hilfsfunktionen ────────────────────────────────────────────────
 
+function getCsrfToken() {
+  var meta = document.querySelector('meta[name="csrf-token"]');
+  return meta ? meta.getAttribute("content") : "";
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -34,13 +39,21 @@ function safeParse(markdown) {
   return DOMPurify.sanitize(marked.parse(markdown));
 }
 
+function _updateThemeButton() {
+  var effective = document.documentElement.getAttribute("data-bs-theme") || "light";
+  var btn = document.getElementById("theme-toggle");
+  if (btn) btn.textContent = effective === "dark" ? "☀" : "☾";
+}
+
 function toggleTheme() {
-  var current = document.documentElement.getAttribute("data-bs-theme") || "light";
-  var next = current === "dark" ? "light" : "dark";
+  var stored = localStorage.getItem("rag-theme") || "auto";
+  var effective = document.documentElement.getAttribute("data-bs-theme") || "light";
+  // Toggle to opposite of effective; overrides auto with an explicit choice.
+  var next = effective === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-bs-theme", next);
   localStorage.setItem("rag-theme", next);
-  var btn = document.getElementById("theme-toggle");
-  if (btn) btn.textContent = next === "dark" ? "☀" : "☾";
+  _updateThemeButton();
+  _updateSettingsUI();
 }
 
 function setFontSize(size) {
@@ -64,7 +77,7 @@ function _updateSettingsUI() {
 // ── DOM-Event-Handler (alle in einem Listener) ────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", function () {
-  // Bestehend: Confirm-Dialog-Delegation
+  // Confirm-Dialog-Delegation (muss vor data-loading registriert werden)
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (e) {
       if (!confirm(form.dataset.confirm)) {
@@ -73,11 +86,22 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
+  // Lade-Indikator: Button nach Submit deaktivieren (z.B. Instanz löschen = dauert)
+  document.querySelectorAll("form[data-loading]").forEach(function (form) {
+    form.addEventListener("submit", function (e) {
+      if (e.defaultPrevented) return; // data-confirm hat abgebrochen
+      var btn = form.querySelector("[type=submit]");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = btn.dataset.loadingText || "Wird ausgeführt…";
+      }
+    });
+  });
+
   // Theme-Toggle-Button in der Navbar
   var themeBtn = document.getElementById("theme-toggle");
   if (themeBtn) {
-    themeBtn.textContent =
-      document.documentElement.getAttribute("data-bs-theme") === "dark" ? "☀" : "☾";
+    _updateThemeButton();
     themeBtn.addEventListener("click", toggleTheme);
   }
 
@@ -110,8 +134,7 @@ document.addEventListener("DOMContentLoaded", function () {
             : "light"
           : pref;
       document.documentElement.setAttribute("data-bs-theme", effective);
-      var toggle = document.getElementById("theme-toggle");
-      if (toggle) toggle.textContent = effective === "dark" ? "☀" : "☾";
+      _updateThemeButton();
       _updateSettingsUI();
     });
   });
@@ -146,5 +169,27 @@ document.addEventListener("DOMContentLoaded", function () {
     } catch (_) {
       // Fallback: Server-gerenderter Text bleibt unverändert
     }
+  });
+
+  // Logout: alle chat-state-*-Slots aus sessionStorage löschen (Nutzer-Isolation)
+  var logoutLink = document.querySelector('a[href="/logout"]');
+  if (logoutLink) {
+    logoutLink.addEventListener("click", function () {
+      Object.keys(sessionStorage)
+        .filter(function (k) { return k.startsWith("chat-state-"); })
+        .forEach(function (k) { sessionStorage.removeItem(k); });
+    });
+  }
+
+  // Komma → Punkt in Dezimalfeldern (live beim Tippen)
+  document.querySelectorAll("[data-decimal-input]").forEach(function (input) {
+    input.addEventListener("input", function () {
+      var val = input.value;
+      if (val.indexOf(",") !== -1) {
+        var pos = input.selectionStart;
+        input.value = val.replace(",", ".");
+        input.setSelectionRange(pos, pos);
+      }
+    });
   });
 });

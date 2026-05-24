@@ -1,3 +1,11 @@
+# Frontend build stage
+FROM node:22-slim AS frontend-builder
+WORKDIR /frontend
+COPY src/frontend/package*.json ./
+RUN npm ci
+COPY src/frontend/ ./
+RUN npm run build
+
 # Build stage
 FROM python:3.12-slim AS builder
 
@@ -65,6 +73,7 @@ COPY --from=builder /build/setup.py /app/setup.py
 COPY --from=builder /build/alembic.ini /app/alembic.ini
 COPY --from=builder /build/alembic /app/alembic
 COPY --from=builder /build/.cache/huggingface /app/.cache/huggingface
+COPY --from=frontend-builder /frontend/dist /app/src/frontend/dist
 
 # Set environment variables
 ENV PYTHONPATH=/app/src:$PYTHONPATH \

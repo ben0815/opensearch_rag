@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, DateTime, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy import Index
 
 
 def _utcnow() -> datetime:
@@ -23,6 +24,8 @@ class User(Base):
     local_password_hash  = Column(String(255))
     created_at           = Column(DateTime, nullable=False, default=_utcnow)
     last_login           = Column(DateTime)
+    default_instance_id  = Column(Integer, ForeignKey("instances.id", ondelete="SET NULL"))
+    preferences          = Column(JSON)
     instance_memberships = relationship("InstanceMember", back_populates="user", foreign_keys="InstanceMember.user_id")
     group_memberships    = relationship("GroupMember", back_populates="user")
     sessions             = relationship("Session", back_populates="user")
@@ -89,19 +92,34 @@ class AppSetting(Base):
 
 class ChatHistory(Base):
     __tablename__ = "chat_history"
-    id           = Column(Integer, primary_key=True)
-    user_id      = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    instance_id  = Column(Integer, ForeignKey("instances.id", ondelete="CASCADE"), nullable=False)
-    question     = Column(Text, nullable=False)
-    answer       = Column(Text, nullable=False)
-    context_docs = Column(JSON)
-    created_at   = Column(DateTime, nullable=False, default=_utcnow)
+    id                = Column(Integer, primary_key=True)
+    user_id           = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    instance_id       = Column(Integer, ForeignKey("instances.id", ondelete="CASCADE"), nullable=False)
+    question          = Column(Text, nullable=False)
+    answer            = Column(Text, nullable=False)
+    context_docs      = Column(JSON)
+    response_metadata = Column(JSON)
+    created_at        = Column(DateTime, nullable=False, default=_utcnow)
 
 
 class Session(Base):
     __tablename__ = "sessions"
-    token      = Column(String(128), primary_key=True)
-    user_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    user       = relationship("User", back_populates="sessions")
+    token              = Column(String(128), primary_key=True)
+    user_id            = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    expires_at         = Column(DateTime, nullable=False)
+    created_at         = Column(DateTime, nullable=False, default=_utcnow)
+    is_impersonation   = Column(Boolean, nullable=False, default=False)
+    impersonated_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    user               = relationship("User", back_populates="sessions", foreign_keys=[user_id])
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    id          = Column(Integer, primary_key=True)
+    user_id     = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+    action      = Column(String(64), nullable=False)
+    target_type = Column(String(64))
+    target_id   = Column(String(255))
+    detail      = Column(JSON)
+    ip_address  = Column(String(64))
+    created_at  = Column(DateTime, nullable=False, default=_utcnow)

@@ -51,7 +51,10 @@
     </div>
   </div>
 </div>
-<script>window._LLM_STREAM_TIMEOUT_MS = {{ stream_timeout_ms | default(270000) }};</script>
+<div id="chat-config"
+     data-stream-timeout="{{ stream_timeout_ms | default(270000) }}"
+     data-user-id="{{ user.id }}"
+     hidden></div>
 <script src="/static/js/chat.js?v={{ js_version }}"></script>
 {% endif %}
 {% endblock %}

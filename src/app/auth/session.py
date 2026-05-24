@@ -15,31 +15,52 @@ def _utcnow() -> datetime:
 
 def _hash_token(token: str) -> str:
     # SHA-256 des Klartext-Tokens — nur der Hash wird in der DB gespeichert.
-    # Selbst bei vollem DB-Dump sind aktive Sessions nicht hijackbar.
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-async def create_session(db: AsyncSession, user_id: int) -> str:
-    token = secrets.token_urlsafe(32)          # Geht ins Cookie
-    token_hash = _hash_token(token)             # Wird in DB gespeichert
-    expires_at = _utcnow() + timedelta(hours=SESSION_LIFETIME_HOURS)
-    db.add(Session(token=token_hash, user_id=user_id, expires_at=expires_at))
+async def create_session(
+    db: AsyncSession,
+    user_id: int,
+    lifetime_hours: int | None = None,
+    is_impersonation: bool = False,
+    impersonated_by_id: int | None = None,
+) -> str:
+    if lifetime_hours is None:
+        lifetime_hours = SESSION_LIFETIME_HOURS
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_token(token)
+    expires_at = _utcnow() + timedelta(hours=lifetime_hours)
+    db.add(Session(
+        token=token_hash,
+        user_id=user_id,
+        expires_at=expires_at,
+        is_impersonation=is_impersonation,
+        impersonated_by_id=impersonated_by_id,
+    ))
     await db.commit()
     return token
 
 
 async def get_user_by_token(db: AsyncSession, token: str) -> User | None:
-    result = await db.execute(
+    user, _ = await get_user_and_session_by_token(db, token)
+    return user
+
+
+async def get_user_and_session_by_token(
+    db: AsyncSession, token: str
+) -> tuple[User | None, Session | None]:
+    session = (await db.execute(
         select(Session).where(
             Session.token == _hash_token(token),
             Session.expires_at > _utcnow(),
         )
-    )
-    session = result.scalar_one_or_none()
+    )).scalar_one_or_none()
+
     if not session:
-        return None
-    result = await db.execute(select(User).where(User.id == session.user_id))
-    return result.scalar_one_or_none()
+        return None, None
+
+    user = (await db.execute(select(User).where(User.id == session.user_id))).scalar_one_or_none()
+    return user, session
 
 
 async def delete_session(db: AsyncSession, token: str) -> None:

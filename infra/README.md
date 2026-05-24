@@ -53,8 +53,11 @@ Reverse-Proxy mit automatischem TLS — nur für den Produktionseinsatz.
 Vor dem ersten Start mit Caddy in `infra/.env` setzen:
 ```bash
 APP_BIND_HOST=127.0.0.1   # App-Port nicht mehr direkt von außen erreichbar
-SECURE_COOKIES=true        # Session-Cookies auf HTTPS-only
+SECURE_COOKIES=true        # Session- und CSRF-Cookies auf HTTPS-only
 DOMAIN=rag.example.com     # Muss auf den Host zeigen (für Let's Encrypt)
+# APP_SECRET_KEY muss gesetzt sein — Beispiel:
+# python -c "import secrets; print(secrets.token_hex(32))"
+APP_SECRET_KEY=<langer_zufälliger_wert>
 ```
 
 Caddy kommuniziert mit der App intern über `app:8081` im Docker-Netzwerk.

@@ -141,7 +141,7 @@ class DocumentProcessor:
             existing = await self.metadata_service.get_document_metadata(file_hash)
             if existing:
                 logger.info(f'Skipping already-indexed document: {file_path.name}')
-                yield 100.0
+                yield {"already_indexed": True, "file_hash": file_hash}
                 return
 
             chunk_count = 0

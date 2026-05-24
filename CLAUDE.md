@@ -49,9 +49,26 @@ curl -X DELETE http://localhost:9200/documents_<slug>
 
 ```
 opensearch_rag/
-├── Dockerfile                        # Multi-stage build; CMD uvicorn app.app_fastapi:app
+├── Dockerfile                        # Multi-stage build: node→frontend, python→app
 ├── requirements.txt                  # Pinned third-party deps
 ├── setup.py                          # Package-Installation (src/ als package root)
+├── src/frontend/                     # React 19 SPA (Vite + TypeScript)
+│   ├── package.json                  # npm deps: react, react-bootstrap, zustand, i18next, recharts …
+│   ├── vite.config.ts                # Proxy /api → localhost:8081 im Dev-Modus
+│   ├── tsconfig.json
+│   ├── index.html
+│   ├── dist/                         # Build-Ausgabe (in .gitignore; vom Docker-Build kopiert)
+│   └── src/
+│       ├── main.tsx                  # Entry: i18n init, Bootstrap CSS
+│       ├── App.tsx                   # BrowserRouter, AuthGuard, AdminGuard, lazy admin pages
+│       ├── api/client.ts             # Fetch-Wrapper (CSRF, credentials), alle API-Methoden
+│       ├── types/api.ts              # TypeScript-Spiegel der Pydantic-Schemas
+│       ├── stores/                   # Zustand-Stores: authStore, instanceStore, preferencesStore
+│       ├── hooks/                    # useChat (SSE+AbortController), useDocumentUpload (SSE)
+│       ├── components/               # AppShell, Sidebar, InstanceSelector, MessageBubble …
+│       ├── pages/                    # LoginPage, ChatPage, DocumentsPage, HistoryPage
+│       ├── pages/admin/              # AdminLayout + alle Admin-Seiten
+│       └── i18n/                     # de.json, en.json, index.ts (i18next + LanguageDetector)
 ├── infra/
 │   ├── docker-compose.yml            # 4 Services: opensearch, app, redis, postgres
 │   ├── .env                          # Lokale Konfiguration (nicht in Git)
@@ -72,7 +89,8 @@ opensearch_rag/
     ├── auth/
     │   ├── ldap_service.py           # LDAP-Authentifizierung (synchron — in asyncio.to_thread aufrufen)
     │   ├── middleware.py             # AuthMiddleware: Session-Token aus Cookie prüfen
-    │   └── session.py               # create_session(), get_user_by_token(), purge_expired_sessions()
+    │   ├── session.py               # create_session(), get_user_by_token(), purge_expired_sessions()
+    │   └── csrf.py                  # CsrfMiddleware: Double-Submit-Cookie (HMAC-SHA256); setzt request.state.csrf_token
     ├── cli/
     │   └── admin.py                  # CLI: python -m app.cli.admin create-admin <user> <pass>
     ├── db/
@@ -97,7 +115,9 @@ opensearch_rag/
     │   ├── instance_service.py       # create_instance(), delete_instance() (inkl. OpenSearch-Index)
     │   └── user_service.py           # get_user_instances(), get_effective_role()
     └── utils/
-        └── logging_config.py         # setup_logger(): strukturiertes Logging
+        ├── logging_config.py         # setup_logger(): strukturiertes Logging
+        ├── templates.py              # Jinja2-Singleton; Filter: url_encode; Global: csrf_input(request)
+        └── flash.py                  # set_flash(), read_flash(), clear_flash() — einmalige Statusmeldungen via httponly Cookies
 ```
 
 ## Architektur-Entscheidungen
@@ -191,11 +211,26 @@ alembic stamp head
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 pip install -e .                        # Installiert src/ als package
-# infra/.env muss existieren
+# infra/.env muss existieren + DEV_MODE=true setzen
 alembic upgrade head                    # Schema anlegen
 uvicorn app.app_fastapi:app --reload --port 8081
 ```
 Voraussetzung: OpenSearch, Redis und PostgreSQL laufen (z.B. via `docker compose up opensearch redis postgres -d`).
+
+### Frontend-Entwicklung (Vite Dev-Server)
+```bash
+cd src/frontend
+npm install
+npm run dev          # Startet Vite auf Port 5173, proxied /api → localhost:8081
+```
+`DEV_MODE=true` in `infra/.env` aktiviert CORS für Port 5173.
+Build für Produktion: `npm run build` → erzeugt `src/frontend/dist/`.
+
+### Frontend-Build manuell (ohne Docker)
+```bash
+cd src/frontend && npm run build
+# FastAPI serviert dist/ automatisch sobald das Verzeichnis existiert
+```
 
 ### Ersten Admin anlegen
 ```bash

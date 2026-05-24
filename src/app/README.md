@@ -33,6 +33,7 @@ FastAPI-Dependencies: `get_config()`, `get_redis()`, `limiter` (slowapi, Rate Li
 | `ldap_service.py` | Synchroner LDAP-Bind, prüft `pwdAccountLockedTime` und `shadowExpire`, optionaler Admin-Gruppen-Check. Immer via `asyncio.to_thread()` aufrufen. |
 | `middleware.py` | `AuthMiddleware`: Session-Token aus Cookie prüfen; nicht authentifizierte Requests → Redirect `/login`. |
 | `session.py` | `create_session()`, `get_user_by_token()`, `delete_session()`, `purge_expired_sessions()`. Sessions in PostgreSQL, Lifetime konfigurierbar via `SESSION_LIFETIME_HOURS`. |
+| `csrf.py` | `CsrfMiddleware`: Double-Submit-Cookie-Muster mit HMAC-SHA256-Signierung (stdlib). Setzt `request.state.csrf_token` auf jedem Request. Validiert bei unsafe Methods über `X-CSRF-Token`-Header (Multipart/Fetch) oder Formularfeld `csrf_token` (URL-encoded). `enforce=False` → nur Logging, kein 403. |
 
 ## cli/
 
@@ -92,4 +93,8 @@ Key-Schema: `doc:{instance_slug}:{sha256}`. Listing via SCAN (kein KEYS).
 
 ## utils/
 
-`logging_config.py` — `setup_logger()`: strukturiertes Logging mit Modul-Namen.
+| Datei | Inhalt |
+|---|---|
+| `logging_config.py` | `setup_logger()`: strukturiertes Logging mit Modul-Namen. |
+| `templates.py` | Jinja2-Templates-Singleton (`templates`). Registriert Filter `url_encode` (URL-Encoding für Query-Parameter) und Global `csrf_input(request)` (gibt ein `<input type="hidden" name="csrf_token">` als `Markup` zurück). |
+| `flash.py` | `set_flash(response, message, category)`, `read_flash(request)`, `clear_flash(response)` — einmalige Statusmeldungen nach Redirects via httponly Cookies (`flash_msg` / `flash_cat`, max. 30 s). |

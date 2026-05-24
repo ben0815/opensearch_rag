@@ -11,6 +11,9 @@ Multi-mandantenfähige RAG-Anwendung (Retrieval-Augmented Generation) auf Basis 
 - **Admin-UI**: Instanzen, Gruppen und Benutzer verwalten; globale LLM/Such-Parameter live anpassbar; System-Status-Dashboard; per-Instanz BM25-Sprachanalyzer und LLM-Parameter konfigurierbar
 - **Chat-Verlauf**: durchsuchbar, nach Instanz filterbar; letzten 3 Frage/Antwort-Paare fließen als Gesprächskontext in Folgefragen ein
 - **Rate Limiting**: Login auf 10 Versuche/Minute, Chat-Stream auf 30 Anfragen/Minute begrenzt
+- **CSRF-Schutz**: Double-Submit-Cookie-Muster (HMAC-SHA256, stdlib); alle POST-Formulare und Fetch-Requests abgesichert; `CSRF_ENFORCE=false` für Log-only-Modus bei schrittweiser Einführung
+- **Flash-Nachrichten**: serverseitige Statusmeldungen nach Redirects (httponly Cookies, max. 30 s Lebensdauer)
+- **Fehlerseiten**: eigene HTML-Seiten für 404, 403 und 500
 
 ## Voraussetzungen
 
@@ -78,6 +81,8 @@ Alle Variablen werden in `infra/.env` gesetzt (Vorlage: `infra/.env.example`). I
 | `POSTGRES_PASSWORD` | `changeme` | Passwort für die PostgreSQL-Datenbank |
 | `REDIS_PASSWORD` | _(leer)_ | Redis-Passwort (leer = kein Passwort; in Produktion setzen) |
 | `SECURE_COOKIES` | `false` | Cookies auf HTTPS-only setzen (nur mit TLS-Termination) |
+| `APP_SECRET_KEY` | _(Pflicht)_ | Geheimer Schlüssel für CSRF-Token-Signierung. Generieren: `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `CSRF_ENFORCE` | `true` | `false` = CSRF-Fehler nur loggen, nicht blockieren (schrittweise Einführung) |
 | `APP_BIND_HOST` | `0.0.0.0` | Bind-Adresse des App-Ports auf dem Host. `0.0.0.0` = von allen Rechnern im Netz erreichbar (Entwicklung). In Produktion mit Caddy auf `127.0.0.1` setzen. |
 
 ---
@@ -206,7 +211,7 @@ Steuert, wie kreativ oder deterministisch das LLM antwortet:
 
 Wie lange die App auf eine vollständige LLM-Antwort wartet, bevor die Verbindung abbricht. Große Modelle oder lange Antworten brauchen mehr Zeit.
 
-**Kopplung mit dem Frontend**: Der Browser-seitige Timeout wird automatisch aus `LLM_TIMEOUT_SECONDS + 30 s` berechnet und beim Laden der Chat-Seite als `window._LLM_STREAM_TIMEOUT_MS` injiziert. Eine manuelle Anpassung in `chat.js` ist nicht mehr nötig.
+**Kopplung mit dem Frontend**: Der Browser-seitige Timeout wird automatisch aus `LLM_TIMEOUT_SECONDS + 30 s` berechnet und über ein `data-stream-timeout`-Attribut auf einem versteckten `<div id="chat-config">` an `chat.js` übergeben. Eine manuelle Anpassung in `chat.js` ist nicht nötig.
 
 #### `LLM_NUM_CTX` (Standard: 16384)
 
@@ -373,6 +378,7 @@ Browser
   │
   ▼
 FastAPI (app_fastapi.py)
+  ├── CsrfMiddleware      — Double-Submit-Cookie; 403 bei fehlgültigem Token (unsafe Methods)
   ├── AuthMiddleware      — Session-Token aus Cookie; Redirect → /login
   ├── /login /logout      — LDAP-Bind oder lokaler bcrypt-Check
   ├── /chat /chat/stream  — SSE-Streaming: sources → tokens → done

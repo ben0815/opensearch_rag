@@ -6,6 +6,7 @@
   <div class="d-flex gap-2 align-items-center">
     <form method="post" action="/chat/history/clear"
       data-confirm="Gesamten Verlauf wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.">
+      {{ csrf_input(request) }}
       {% if active_instance_id %}
       <input type="hidden" name="instance_id" value="{{ active_instance_id }}">
       {% endif %}
@@ -15,9 +16,10 @@
   </div>
 </div>
 
-<form method="get" action="/chat/history" class="row g-2 mb-3">
-  <div class="col-auto">
-    <select name="instance_id" class="form-select form-select-sm">
+<div class="d-flex align-items-end gap-2 mb-3 flex-wrap">
+  <form method="get" action="/chat/history" class="d-flex gap-2 flex-wrap align-items-end">
+    <input type="hidden" name="order" value="{{ order }}">
+    <select name="instance_id" class="form-select form-select-sm w-auto">
       <option value="">Alle Instanzen</option>
       {% for entry in instances %}
       <option value="{{ entry.instance.id }}"
@@ -26,15 +28,19 @@
       </option>
       {% endfor %}
     </select>
-  </div>
-  <div class="col-auto">
     <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
-      placeholder="Stichwort...">
-  </div>
-  <div class="col-auto">
-    <button type="submit" class="btn btn-sm btn-primary">Filtern</button>
-  </div>
-</form>
+      style="min-width:16rem" placeholder="Frage oder Antwort… (* als Platzhalter)">
+    <button type="submit" class="btn btn-sm btn-primary">Suchen</button>
+    {% if q %}
+    <a href="/chat/history?order={{ order }}{% if active_instance_id %}&instance_id={{ active_instance_id }}{% endif %}"
+       class="btn btn-sm btn-outline-secondary" title="Suche zurücksetzen">×</a>
+    {% endif %}
+  </form>
+  {% set next_order = "asc" if order == "desc" else "desc" %}
+  {% set order_label = "Älteste zuerst ↑" if order == "desc" else "Neueste zuerst ↓" %}
+  <a href="?order={{ next_order }}{% if q %}&q={{ q | url_encode }}{% endif %}{% if active_instance_id %}&instance_id={{ active_instance_id }}{% endif %}&page=1"
+     class="btn btn-sm btn-outline-secondary ms-auto">{{ order_label }}</a>
+</div>
 
 <div class="accordion" id="historyAccordion">
   {% for item in history %}
@@ -53,6 +59,7 @@
       <form method="post" action="/chat/history/{{ item.entry.id }}/delete"
         class="d-flex align-items-center px-2 border-start"
         data-confirm="Diesen Eintrag aus dem Verlauf löschen?">
+        {{ csrf_input(request) }}
         <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1"
           aria-label="Eintrag löschen">×</button>
       </form>
@@ -79,7 +86,9 @@
     </div>
   </div>
   {% else %}
-  <p class="text-muted">Kein Verlauf vorhanden.</p>
+  <div class="text-center text-muted py-5">
+    Noch keine Fragen gestellt. Auf <a href="/chat">Chat</a> gehen und die erste Frage stellen.
+  </div>
   {% endfor %}
 </div>
 

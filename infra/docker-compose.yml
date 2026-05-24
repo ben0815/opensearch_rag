@@ -127,6 +127,9 @@ services:
       # Das Frontend (chat.js) wartet LLM_TIMEOUT_SECONDS + 30s — beide müssen konsistent sein.
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-240}
       - SECURE_COOKIES=${SECURE_COOKIES:-false}
+      # CSRF — APP_SECRET_KEY ist Pflicht; Generieren: python -c "import secrets; print(secrets.token_hex(32))"
+      - APP_SECRET_KEY=${APP_SECRET_KEY}
+      - CSRF_ENFORCE=${CSRF_ENFORCE:-true}
       # Debug settings
       - PYTHONUNBUFFERED=1
     volumes:

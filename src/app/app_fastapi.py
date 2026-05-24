@@ -1,31 +1,32 @@
 import asyncio
-import hashlib
 import os
-import urllib.request
-import urllib.error
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 import redis.asyncio as aioredis
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.auth.csrf import CsrfMiddleware
 from app.auth.middleware import AuthMiddleware
 from app.auth.session import purge_expired_sessions
 from app.db.session import get_db, get_session_factory
-from app.db.models import Instance
 from app.loader.config import LoaderConfig
-from app.dependencies import get_config, get_redis, limiter  # noqa: F401 — kein Zirkel
+from app.dependencies import get_config, get_redis, limiter  # noqa: F401
 from app.routes import auth as auth_router
 from app.routes import chat as chat_router
 from app.routes import documents as documents_router
 from app.routes import admin as admin_router
+from app.routes import user as user_router
 from app.utils.logging_config import setup_logger
 
 _env_file = os.getenv("ENV_FILE") or str(Path(__file__).resolve().parents[2] / "infra" / ".env")
@@ -33,41 +34,28 @@ load_dotenv(_env_file, override=False)
 logger = setup_logger(__name__)
 
 _SESSION_CLEANUP_INTERVAL = int(os.getenv("SESSION_CLEANUP_INTERVAL_SECONDS", "3600"))
+_AUDIT_CLEANUP_INTERVAL = 86400  # daily
 
-
-def _check_ollama(host: str) -> None:
-    url = host.rstrip("/") + "/api/version"
-    try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
-            logger.info("Ollama erreichbar: %s — HTTP %s", url, resp.status)
-    except urllib.error.URLError as e:
-        logger.warning("Ollama NICHT erreichbar (%s): %s — LLM-Anfragen werden fehlschlagen.", url, e)
-    except Exception as e:
-        logger.warning("Ollama-Check fehlgeschlagen (%s): %s", url, e)
-
-
-def _compute_js_version() -> str:
-    js_dir = Path("src/resources/js")
-    if not js_dir.exists():
-        return "dev"
-    h = hashlib.md5()
-    for f in sorted(js_dir.glob("*.js")):
-        h.update(f.read_bytes())
-    return h.hexdigest()[:8]
 _SECURE_COOKIES = os.getenv("SECURE_COOKIES", "false").lower() == "true"
+_APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "")
+if not _APP_SECRET_KEY:
+    raise RuntimeError(
+        "APP_SECRET_KEY ist nicht gesetzt. "
+        "Bitte in infra/.env einen langen zufälligen Wert setzen — "
+        "Beispiel: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
 
 _SECURITY_HEADERS = {
-    # frame-ancestors ersetzt X-Frame-Options in modernen Browsern
     "Content-Security-Policy": (
-        "default-src 'self' cdn.jsdelivr.net; "
-        "script-src 'self' cdn.jsdelivr.net; "
-        "style-src 'self' cdn.jsdelivr.net 'unsafe-inline'; "
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
-        "font-src 'self' cdn.jsdelivr.net; "
+        "font-src 'self' data:; "
         "connect-src 'self'; "
-        "frame-ancestors 'none'; "   # Clickjacking-Schutz
-        "base-uri 'self'; "          # Base-Tag-Injection verhindern
-        "form-action 'self'"         # Formulare nur an eigene Domain
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
     ),
     "X-Content-Type-Options": "nosniff",
     "X-XSS-Protection": "1; mode=block",
@@ -84,7 +72,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 async def _session_cleanup_loop() -> None:
-    """Löscht stündlich abgelaufene Sessions aus der Datenbank."""
     factory = get_session_factory()
     while True:
         await asyncio.sleep(_SESSION_CLEANUP_INTERVAL)
@@ -94,6 +81,27 @@ async def _session_cleanup_loop() -> None:
             logger.info("Expired sessions purged")
         except Exception as e:
             logger.error(f"Session cleanup failed: {e}")
+
+
+async def _audit_cleanup_loop() -> None:
+    factory = get_session_factory()
+    while True:
+        await asyncio.sleep(_AUDIT_CLEANUP_INTERVAL)
+        try:
+            from app.db.models import AuditLog, AppSetting
+            from sqlalchemy import delete
+            import datetime as _dt
+            async with factory() as db:
+                retention_row = (await db.execute(
+                    select(AppSetting).where(AppSetting.key == "audit_retention_days")
+                )).scalar_one_or_none()
+                days = int(retention_row.value) if retention_row else 90
+                cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - _dt.timedelta(days=days)
+                await db.execute(delete(AuditLog).where(AuditLog.created_at < cutoff))
+                await db.commit()
+            logger.info("Audit log cleanup done (retention=%d days)", days)
+        except Exception as e:
+            logger.error(f"Audit cleanup failed: {e}")
 
 
 _TUNABLE_SETTINGS = {
@@ -110,10 +118,9 @@ _SETTING_TYPES: dict[str, type] = {
 
 
 async def _load_db_settings(config: LoaderConfig, db_factory) -> None:
-    """Load saved admin settings from app_settings table. Gracefully skips if table missing."""
     from app.db.models import AppSetting
     try:
-        async with db_factory() as db:
+        async with db_factory()() as db:
             rows = (await db.execute(select(AppSetting))).scalars().all()
             for row in rows:
                 if row.key in _TUNABLE_SETTINGS and hasattr(config, row.key):
@@ -126,24 +133,60 @@ async def _load_db_settings(config: LoaderConfig, db_factory) -> None:
         logger.warning("app_settings table not yet available, using env defaults: %s", e)
 
 
+async def _seed_app_settings(db_factory) -> None:
+    """Seed app_settings with env-var defaults on first startup."""
+    try:
+        from app.services.config_service import seed_ldap_config
+        from app.db.models import AppSetting
+        async with db_factory()() as db:
+            await seed_ldap_config(db)
+            # Seed session_lifetime_hours if not present
+            existing = (await db.execute(
+                select(AppSetting).where(AppSetting.key == "session_lifetime_hours")
+            )).scalar_one_or_none()
+            if existing is None:
+                hours = os.getenv("SESSION_LIFETIME_HOURS", "8")
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                db.add(AppSetting(key="session_lifetime_hours", value=hours, updated_at=now))
+                await db.commit()
+    except Exception as e:
+        logger.warning("app_settings seed failed (table may not exist yet): %s", e)
+
+
+def _check_ollama(host: str) -> None:
+    import urllib.request, urllib.error
+    url = host.rstrip("/") + "/api/version"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            logger.info("Ollama erreichbar: %s — HTTP %s", url, resp.status)
+    except urllib.error.URLError as e:
+        logger.warning("Ollama NICHT erreichbar (%s): %s", url, e)
+    except Exception as e:
+        logger.warning("Ollama-Check fehlgeschlagen (%s): %s", url, e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: Singletons einmalig anlegen. Shutdown: Verbindungen sauber schließen."""
-    from app.utils.templates import templates as jinja_templates
-    jinja_templates.env.globals["js_version"] = _compute_js_version()
+    if not _SECURE_COOKIES:
+        logger.warning("SECURE_COOKIES=false — Session-Cookies ohne Secure-Flag.")
     config = LoaderConfig()
     _check_ollama(config.ollama_host)
     app.state.config = config
+
     redis_kwargs = dict(host=config.redis_host, port=config.redis_port, decode_responses=True)
     if config.redis_password:
         redis_kwargs["password"] = config.redis_password
     app.state.redis = aioredis.Redis(**redis_kwargs)
     await app.state.redis.ping()
-    # Lade gespeicherte Admin-Einstellungen aus DB (Klasse-A-Parameter überschreiben Env-Defaults)
+
     await _load_db_settings(config, get_session_factory)
-    cleanup_task = asyncio.create_task(_session_cleanup_loop())
+    await _seed_app_settings(get_session_factory)
+
+    session_task = asyncio.create_task(_session_cleanup_loop())
+    audit_task = asyncio.create_task(_audit_cleanup_loop())
     yield
-    cleanup_task.cancel()
+    session_task.cancel()
+    audit_task.cancel()
     await app.state.redis.aclose()
 
 
@@ -151,38 +194,60 @@ app = FastAPI(title="RAG Multi-Tenant", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# DEV_MODE CORS: only active when Vite dev server proxies requests (port 5173).
+# In production, Vite build output is served from the same origin — no CORS needed.
+if os.getenv("DEV_MODE", "false").lower() == "true":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+@app.exception_handler(404)
+async def _not_found_handler(request: Request, exc):
+    return JSONResponse({"detail": "Not found"}, status_code=404)
+
+
+@app.exception_handler(403)
+async def _forbidden_handler(request: Request, exc):
+    return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
 
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: Request, exc: Exception):
-    # HTTPException und RequestValidationError haben eigene Handler in FastAPI —
-    # hier re-raisen, damit der Starlette-Dispatcher sie korrekt weiterleitet.
     if isinstance(exc, (HTTPException, RequestValidationError)):
         raise exc
     logger.error("Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc)
-    return JSONResponse(status_code=500, content={"detail": "Interner Fehler."})
+    return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CsrfMiddleware)
 app.add_middleware(AuthMiddleware)
-app.mount("/static", StaticFiles(directory="src/resources"), name="static")
+
 app.include_router(auth_router.router)
+app.include_router(user_router.router)
 app.include_router(chat_router.router)
 app.include_router(documents_router.router)
 app.include_router(admin_router.router)
-
-
-@app.get("/")
-async def root(request: Request, db: AsyncSession = Depends(get_db)):
-    """Smarter Redirect: Admin ohne Instanzen → direkt zur Instanz-Verwaltung."""
-    user = getattr(request.state, "user", None)
-    if user and user.is_global_admin:
-        count = (await db.execute(select(func.count()).select_from(Instance))).scalar()
-        if count == 0:
-            return RedirectResponse(url="/admin/instances")
-    return RedirectResponse(url="/chat")
 
 
 @app.get("/health")
 async def health():
     from app import __version__
     return JSONResponse({"status": "ok", "version": __version__})
+
+
+# Serve React SPA — must come AFTER API routes so catch-all doesn't shadow them.
+# The dist path is relative to where uvicorn is started (the repo root).
+_frontend_dist = Path(__file__).resolve().parents[2] / "src" / "frontend" / "dist"
+if _frontend_dist.exists():
+    app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def _spa_catchall(request: Request, full_path: str):
+        from fastapi.responses import FileResponse
+        return FileResponse(str(_frontend_dist / "index.html"))

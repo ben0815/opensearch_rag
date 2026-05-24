@@ -35,7 +35,19 @@ let _currentAbortController = null;
 let _streamTimeout = null;
 // Modul-Variable für _startElapsedTimer — zeigt immer auf den aktiven Indikator-Span.
 let _thinkingIndicatorEl = null;
-const _STREAM_TIMEOUT_MS = window._LLM_STREAM_TIMEOUT_MS || 270000;
+const _chatConfig = document.getElementById("chat-config");
+const _STREAM_TIMEOUT_MS = _chatConfig
+  ? parseInt(_chatConfig.dataset.streamTimeout, 10) || 270000
+  : 270000;
+const _USER_ID = _chatConfig ? (_chatConfig.dataset.userId || "0") : "0";
+
+// ── Zustandspersistenz (sessionStorage) ──────────────────────────────────────
+let _currentInstanceId  = null;
+let _currentQuestion    = null;
+let _currentFullAnswer  = "";
+let _currentSourcesData = [];
+let _stateTurns         = [];
+let _saveDebounceTimer  = null;
 
 function _startElapsedTimer() {
   _elapsedSeconds = 0;
@@ -57,16 +69,102 @@ function _stopElapsedTimer() {
   }
 }
 
+// ── sessionStorage ────────────────────────────────────────────────────────────
+
+function _storageKey() {
+  return "chat-state-" + _USER_ID + "-" + _currentInstanceId;
+}
+
+function _saveState(turns, partial) {
+  if (!_currentInstanceId) return;
+  try {
+    sessionStorage.setItem(_storageKey(), JSON.stringify({ turns: turns, partial: partial }));
+  } catch (_) {}
+}
+
+function _loadState() {
+  if (!_currentInstanceId) return { turns: [], partial: null };
+  try {
+    return JSON.parse(sessionStorage.getItem(_storageKey())) || { turns: [], partial: null };
+  } catch (_) {
+    return { turns: [], partial: null };
+  }
+}
+
+function _clearState() {
+  if (!_currentInstanceId) return;
+  try { sessionStorage.removeItem(_storageKey()); } catch (_) {}
+}
+
+function _debouncedSave(partial) {
+  if (_saveDebounceTimer) clearTimeout(_saveDebounceTimer);
+  _saveDebounceTimer = setTimeout(function () {
+    _saveDebounceTimer = null;
+    _saveState(_stateTurns, partial);
+  }, 500);
+}
+
+// ── Gespeicherten Turn in #chat-box rendern (Wiederherstellung) ───────────────
+
+function _renderTurn(chatBox, question, answer, interrupted) {
+  const questionDiv = document.createElement("div");
+  questionDiv.className = "mb-2";
+  questionDiv.innerHTML = "<strong>Sie:</strong> " + escapeHtml(question);
+  chatBox.appendChild(questionDiv);
+
+  const answerSpan = document.createElement("span");
+  const answerDiv  = document.createElement("div");
+  answerDiv.className = "mb-2";
+  const label = document.createElement("strong");
+  label.textContent = "Assistent:";
+  answerDiv.appendChild(label);
+  answerDiv.appendChild(document.createTextNode(" "));
+
+  if (interrupted) {
+    const badge = document.createElement("span");
+    badge.className = "badge bg-secondary ms-1 me-1";
+    badge.textContent = "unterbrochen";
+    answerDiv.appendChild(badge);
+  }
+
+  answerDiv.appendChild(answerSpan);
+  chatBox.appendChild(answerDiv);
+
+  if (answer) {
+    answerSpan.innerHTML = safeParse(answer);
+    if (!interrupted && navigator.clipboard) {
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "btn btn-outline-secondary btn-sm mt-1";
+      copyBtn.textContent = "Antwort kopieren";
+      copyBtn.addEventListener("click", function () {
+        navigator.clipboard.writeText(answer).then(function () {
+          copyBtn.textContent = "Kopiert ✓";
+          setTimeout(function () { copyBtn.textContent = "Antwort kopieren"; }, 2000);
+        });
+      });
+      answerDiv.appendChild(copyBtn);
+    }
+  } else {
+    answerSpan.textContent = "[Keine Antwort erhalten.]";
+  }
+}
+
 // ── Chat leeren ───────────────────────────────────────────────────────────────
 
 function clearChat() {
   if (_streamTimeout) { clearTimeout(_streamTimeout); _streamTimeout = null; }
+  if (_saveDebounceTimer) { clearTimeout(_saveDebounceTimer); _saveDebounceTimer = null; }
   if (_currentAbortController) {
     _currentAbortController.abort();
     _currentAbortController = null;
   }
   _stopElapsedTimer();
   _thinkingIndicatorEl = null;
+  _clearState();
+  _stateTurns         = [];
+  _currentQuestion    = null;
+  _currentFullAnswer  = "";
+  _currentSourcesData = [];
   document.getElementById("chat-box").innerHTML = "";
   document.getElementById("sources-box").innerHTML =
     "<span class='text-muted'>Hier erscheinen die Quell-Abschnitte nach der Antwort.</span>";
@@ -80,6 +178,21 @@ function clearChat() {
 
 function submitQuestion(e) {
   e.preventDefault();
+
+  if (_currentAbortController && _currentFullAnswer) {
+    if (_saveDebounceTimer) { clearTimeout(_saveDebounceTimer); _saveDebounceTimer = null; }
+    _stateTurns.push({
+      question:    _currentQuestion,
+      answer:      _currentFullAnswer,
+      sources:     _currentSourcesData,
+      interrupted: true,
+    });
+    _saveState(_stateTurns, null);
+  }
+  // Unconditionales Reset: verhindert doppelten Push bei Mehrfachabsendung mit leerer Frage
+  _currentQuestion    = null;
+  _currentFullAnswer  = "";
+  _currentSourcesData = [];
 
   // Laufenden Stream und Timeout abbrechen (z.B. neue Frage während alter noch streamt)
   if (_streamTimeout) { clearTimeout(_streamTimeout); _streamTimeout = null; }
@@ -105,6 +218,7 @@ function submitQuestion(e) {
   if (!question) return;
 
   const instanceId = form.querySelector("[name=instance_id]").value;
+  _currentQuestion = question;
   const chatBox = document.getElementById("chat-box");
   const sendBtn = document.getElementById("send-btn");
 
@@ -175,6 +289,8 @@ function submitQuestion(e) {
 
     if (eventType === "sources") {
       sourcesData = JSON.parse(data);
+      _currentSourcesData = sourcesData;
+      _saveState(_stateTurns, { question: _currentQuestion, answer: "", sources: _currentSourcesData });
       renderSources(sourcesData);
 
       // Phase 2: LLM generiert — Zeitzähler starten
@@ -192,6 +308,7 @@ function submitQuestion(e) {
       _currentAbortController = null;
       const payload = JSON.parse(data);
       fullAnswer = payload.answer;
+      _currentFullAnswer = fullAnswer;
 
       // Fallback: Falls Tokens gebuffert ankamen und streamingAnswer noch leer ist,
       // vollständige Antwort aus dem done-Payload rendern.
@@ -200,6 +317,23 @@ function submitQuestion(e) {
         streamingAnswer.innerHTML = safeParse(fullAnswer);
         chatBox.scrollTop = chatBox.scrollHeight;
       }
+
+      if (fullAnswer && navigator.clipboard) {
+        var copyBtn = document.createElement("button");
+        copyBtn.className = "btn btn-outline-secondary btn-sm mt-1";
+        copyBtn.textContent = "Antwort kopieren";
+        copyBtn.addEventListener("click", function () {
+          navigator.clipboard.writeText(fullAnswer).then(function () {
+            copyBtn.textContent = "Kopiert ✓";
+            setTimeout(function () { copyBtn.textContent = "Antwort kopieren"; }, 2000);
+          });
+        });
+        answerDiv.appendChild(copyBtn);
+      }
+
+      if (_saveDebounceTimer) { clearTimeout(_saveDebounceTimer); _saveDebounceTimer = null; }
+      _stateTurns.push({ question: _currentQuestion, answer: fullAnswer, sources: sourcesData });
+      _saveState(_stateTurns, null);
 
       saveHistory(question, fullAnswer, instanceId, sourcesData);
       _restoreButton();
@@ -211,6 +345,7 @@ function submitQuestion(e) {
     // den Indikator entfernen, obwohl noch kein Text sichtbar ist.
     const token = JSON.parse(data);
     fullAnswer += token;
+    _currentFullAnswer = fullAnswer;
     const rendered = safeParse(fullAnswer);
     if (firstToken && rendered.replace(/<[^>]*>/g, "").trim()) {
       _stopElapsedTimer();
@@ -219,6 +354,7 @@ function submitQuestion(e) {
     }
     streamingAnswer.innerHTML = rendered;
     chatBox.scrollTop = chatBox.scrollHeight;
+    _debouncedSave({ question: _currentQuestion, answer: _currentFullAnswer, sources: _currentSourcesData });
   }
 
   function processSseChunk(rawText) {
@@ -240,6 +376,7 @@ function submitQuestion(e) {
   fetch("/chat/stream", {
     method: "POST",
     body: formData,
+    headers: { "X-CSRF-Token": getCsrfToken() },
     signal: _currentAbortController.signal,
   })
     .then(function (response) {
@@ -259,6 +396,16 @@ function submitQuestion(e) {
               thinkingIndicator.remove();
               if (!streamingAnswer.innerHTML.trim()) {
                 streamingAnswer.textContent = "[Keine Antwort erhalten.]";
+              }
+              if (_currentFullAnswer) {
+                if (_saveDebounceTimer) { clearTimeout(_saveDebounceTimer); _saveDebounceTimer = null; }
+                _stateTurns.push({
+                  question:    _currentQuestion,
+                  answer:      _currentFullAnswer,
+                  sources:     _currentSourcesData,
+                  interrupted: true,
+                });
+                _saveState(_stateTurns, null);
               }
               _restoreButton();
               return;
@@ -328,5 +475,47 @@ function saveHistory(question, answer, instanceId, sources) {
   fd.append("answer", answer);
   fd.append("instance_id", instanceId);
   fd.append("context_docs", JSON.stringify(sources));
-  fetch("/chat/save-history", { method: "POST", body: fd });
+  fetch("/chat/save-history", {
+    method: "POST",
+    body: fd,
+    headers: { "X-CSRF-Token": getCsrfToken() },
+  }).catch(function (err) {
+    console.warn("Verlauf konnte nicht gespeichert werden:", err.message);
+  });
 }
+
+// ── Initialisierung: State aus sessionStorage wiederherstellen ────────────────
+// Eigene IIFE am Dateiende — let-Variablen sind hier bereits deklariert.
+(function () {
+  const instanceInput = document.querySelector('#chat-form input[name="instance_id"]');
+  if (!instanceInput) return;
+  _currentInstanceId = instanceInput.value;
+  const state = _loadState();
+  _stateTurns = state.turns || [];
+  const chatBox = document.getElementById("chat-box");
+  if (!chatBox || (!_stateTurns.length && !state.partial)) return;
+  _stateTurns.forEach(function (turn) {
+    _renderTurn(chatBox, turn.question, turn.answer, turn.interrupted || false);
+  });
+  if (state.partial) {
+    _renderTurn(chatBox, state.partial.question, state.partial.answer, true);
+    renderSources(state.partial.sources || []);
+  } else {
+    renderSources(_stateTurns[_stateTurns.length - 1].sources || []);
+  }
+  chatBox.scrollTop = chatBox.scrollHeight;
+})();
+
+// ── beforeunload: Partial-Antwort in History retten (Option B) ────────────────
+window.addEventListener("beforeunload", function () {
+  if (!_currentAbortController) return;
+  if (!_currentFullAnswer || _currentFullAnswer.length < 20) return;
+  if (_saveDebounceTimer) { clearTimeout(_saveDebounceTimer); _saveDebounceTimer = null; }
+  const params = new URLSearchParams();
+  params.append("question",     _currentQuestion);
+  params.append("answer",       _currentFullAnswer + " [unterbrochen]");
+  params.append("instance_id",  _currentInstanceId);
+  params.append("context_docs", JSON.stringify(_currentSourcesData));
+  params.append("csrf_token",   getCsrfToken());
+  navigator.sendBeacon("/chat/save-history", params);
+});

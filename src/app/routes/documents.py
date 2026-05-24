@@ -1,62 +1,63 @@
 import json
 import os
 import tempfile
-from fastapi import APIRouter, Request, UploadFile, File, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import AuditLog, Instance
 from app.db.session import get_db
-from app.db.models import Instance
+from app.dependencies import get_config, get_redis, limiter, _get_user_or_ip
 from app.loader.config import LoaderConfig
-from app.dependencies import get_config, get_redis, limiter
-from app.services.user_service import get_user_instances, get_effective_role
-from app.services.document_service import list_documents, delete_document, get_document_processor
+from app.schemas import DocumentOut
+from app.services.config_service import get_app_setting
+from app.services.document_service import delete_document, get_document_processor, list_documents
+from app.services.user_service import get_effective_role
 
-from app.utils.templates import templates
+router = APIRouter(prefix="/api/documents")
 
-router = APIRouter()
-
-_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+_DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
-@router.get("/documents", response_class=HTMLResponse)
-async def documents_page(
+@router.get("/{instance_id}")
+async def get_documents(
+    instance_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
     config: LoaderConfig = Depends(get_config),
     redis=Depends(get_redis),
 ):
     user = request.state.user
-    user_instances = await get_user_instances(db, user)
+    if not user.is_global_admin:
+        role = await get_effective_role(db, user, instance_id)
+        if role is None:
+            raise HTTPException(status_code=403, detail="Kein Zugriff auf diese Instanz")
 
-    instance_id = request.query_params.get("instance_id")
-    active = None
-    if instance_id:
-        active = next((e for e in user_instances if str(e["instance"].id) == instance_id), None)
-    if not active and user_instances:
-        active = user_instances[0]
+    instance = (await db.execute(select(Instance).where(Instance.id == instance_id))).scalar_one_or_none()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instanz nicht gefunden")
 
-    docs = []
-    can_manage = False
-    if active:
-        docs = await list_documents(redis, active["instance"].slug)
-        can_manage = active["role"] == "manager" or user.is_global_admin
-
-    return templates.TemplateResponse(request, "documents.html", {
-        "user": user,
-        "instances": user_instances,
-        "active_instance": active,
-        "documents": docs,
-        "can_manage": can_manage,
-    })
+    docs = await list_documents(redis, instance.slug)
+    return [
+        DocumentOut(
+            sha256=d.get("file_hash", ""),
+            title=d.get("title", ""),
+            file_size=d.get("file_size", 0),
+            page_count=d.get("page_count", 0),
+            chunk_count=d.get("chunk_count", 0),
+            indexed_date=d.get("indexed_date", ""),
+        ).model_dump()
+        for d in docs
+    ]
 
 
-@router.post("/documents/upload")
-@limiter.limit("10/minute")
+@router.post("/{instance_id}/upload")
+@limiter.limit("10/minute", key_func=_get_user_or_ip)
 async def upload_documents(
+    instance_id: int,
     request: Request,
     files: list[UploadFile] = File(...),
-    instance_id: int = Form(...),
     db: AsyncSession = Depends(get_db),
     config: LoaderConfig = Depends(get_config),
     redis=Depends(get_redis),
@@ -66,55 +67,84 @@ async def upload_documents(
     if role != "manager" and not user.is_global_admin:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
 
-    result = await db.execute(select(Instance).where(Instance.id == instance_id))
-    instance = result.scalar_one_or_none()
+    instance = (await db.execute(select(Instance).where(Instance.id == instance_id))).scalar_one_or_none()
     if not instance:
-        raise HTTPException(status_code=404)
+        raise HTTPException(status_code=404, detail="Instanz nicht gefunden")
 
-    # Processor hier anlegen (einmalig pro Request, nicht pro Datei)
+    # Dynamic upload size limit from app_settings
+    limit_str = await get_app_setting(db, "max_upload_mb")
+    max_bytes = int(limit_str) * 1024 * 1024 if limit_str else _DEFAULT_MAX_UPLOAD_BYTES
+
     processor = await get_document_processor(config, redis, instance.slug)
-
     supported_exts = {e.strip().lower() for e in config.supported_extensions}
 
     async def _stream():
         total = len(files)
         for i, upload in enumerate(files, 1):
-            ext = os.path.splitext(upload.filename or "")[1].lower()
+            fname = upload.filename or ""
+            ext = os.path.splitext(fname)[1].lower()
+
             if ext not in supported_exts:
                 ext_display = ext or "?"
-                yield f"data: {json.dumps({'error': f'Dateiformat nicht unterstützt: {ext_display}', 'file': upload.filename})}\n\n"
+                err_payload = json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'error', 'error': f'Dateiformat nicht unterstützt: {ext_display}'})
+                yield f"data: {err_payload}\n\n"
                 continue
 
-            yield f"data: {json.dumps({'file': upload.filename, 'index': i, 'total': total, 'progress': 0})}\n\n"
+            yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'progress': 0})}\n\n"
 
             total_bytes = 0
             size_exceeded = False
             tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                    # Datei in 1-MB-Chunks schreiben statt komplett in den RAM laden
                     while chunk := await upload.read(1024 * 1024):
                         total_bytes += len(chunk)
-                        if total_bytes > _MAX_UPLOAD_BYTES:
+                        if total_bytes > max_bytes:
                             size_exceeded = True
                             break
                         tmp.write(chunk)
                     tmp_path = tmp.name
+
                 if size_exceeded:
-                    raise ValueError(f'Datei zu groß (max. {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB).')
-                async for progress in processor.load_documents(tmp_path, original_filename=upload.filename):
-                    payload = {
-                        'file': upload.filename,
-                        'index': i,
-                        'total': total,
-                        'progress': round(progress),
-                    }
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    raise ValueError(f'Datei zu groß (max. {max_bytes // (1024 * 1024)} MB).')
+
+                was_already_indexed = False
+                async for progress in processor.load_documents(tmp_path, original_filename=fname):
+                    if isinstance(progress, dict) and progress.get("already_indexed"):
+                        was_already_indexed = True
+                        yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'already_indexed', 'progress': 100})}\n\n"
+                    else:
+                        payload = {
+                            'file': fname,
+                            'index': i,
+                            'total': total,
+                            'progress': round(float(progress)),
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+
+                # Final ok status only for newly processed files
+                if not was_already_indexed:
+                    yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'progress': 100, 'status': 'ok'})}\n\n"
+
+                # Audit log
+                try:
+                    db.add(AuditLog(
+                        user_id=user.id,
+                        action="doc_upload",
+                        target_type="instance",
+                        target_id=str(instance_id),
+                        detail={"filename": fname, "size_bytes": total_bytes},
+                    ))
+                    await db.commit()
+                except Exception:
+                    pass
+
             except Exception as exc:
-                yield f"data: {json.dumps({'error': str(exc), 'file': upload.filename})}\n\n"
+                yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'error', 'error': str(exc)})}\n\n"
             finally:
                 if tmp_path and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
+
         yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
 
     return StreamingResponse(
@@ -124,11 +154,11 @@ async def upload_documents(
     )
 
 
-@router.post("/documents/delete/{file_hash}")
+@router.delete("/{instance_id}/{file_hash}", status_code=204)
 async def delete_document_route(
+    instance_id: int,
     file_hash: str,
     request: Request,
-    instance_id: int = Form(...),
     db: AsyncSession = Depends(get_db),
     config: LoaderConfig = Depends(get_config),
     redis=Depends(get_redis),
@@ -138,10 +168,21 @@ async def delete_document_route(
     if role != "manager" and not user.is_global_admin:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
 
-    result = await db.execute(select(Instance).where(Instance.id == instance_id))
-    instance = result.scalar_one_or_none()
+    instance = (await db.execute(select(Instance).where(Instance.id == instance_id))).scalar_one_or_none()
     if not instance:
-        raise HTTPException(status_code=404)
+        raise HTTPException(status_code=404, detail="Instanz nicht gefunden")
 
     await delete_document(config, redis, instance.slug, file_hash)
-    return RedirectResponse(url=f"/documents?instance_id={instance_id}", status_code=303)
+
+    # Audit log
+    try:
+        db.add(AuditLog(
+            user_id=user.id,
+            action="doc_delete",
+            target_type="instance",
+            target_id=str(instance_id),
+            detail={"file_hash": file_hash},
+        ))
+        await db.commit()
+    except Exception:
+        pass

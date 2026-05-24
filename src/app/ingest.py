@@ -50,12 +50,19 @@ async def ingest(files: list[Path], processor: DocumentProcessor) -> tuple[int, 
     for idx, file in enumerate(files, start=1):
         prefix = f'[{idx}/{total}] {file.name}'
         try:
+            already_indexed = False
             async for progress in processor.load_documents(file):
+                if isinstance(progress, dict) and progress.get("already_indexed"):
+                    already_indexed = True
+                    print(f'\r{prefix}  (bereits indiziert, übersprungen)  ', end='', flush=True)
+                    break
+                pct = float(progress)
                 bar_len = 30
-                filled = int(bar_len * progress / 100)
+                filled = int(bar_len * pct / 100)
                 bar = '█' * filled + '░' * (bar_len - filled)
-                print(f'\r{prefix}  [{bar}] {progress:5.1f}%', end='', flush=True)
-            print(f'\r{prefix}  [{"█" * 30}] 100.0%  ✓')
+                print(f'\r{prefix}  [{bar}] {pct:5.1f}%', end='', flush=True)
+            if not already_indexed:
+                print(f'\r{prefix}  [{"█" * 30}] 100.0%  ✓')
             success += 1
         except Exception as e:
             print(f'\r{prefix}  ✗ {e}')

@@ -32,7 +32,8 @@
         {% if status.opensearch.ok %}
         <table class="table table-sm mb-0">
           <tr><th>Cluster-Status</th><td>{{ status.opensearch.color }}</td></tr>
-          <tr><th>Data-Nodes</th><td>{{ status.opensearch.indices }}</td></tr>
+          <tr><th>Data-Nodes</th><td>{{ status.opensearch.data_nodes }}</td></tr>
+          <tr><th>Indizes</th><td>{{ status.opensearch.index_count }}</td></tr>
         </table>
         {% else %}
         <div class="text-danger small">{{ status.opensearch.error }}</div>
