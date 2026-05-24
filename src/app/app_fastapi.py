@@ -58,6 +58,7 @@ _SECURITY_HEADERS = {
         "form-action 'self'"
     ),
     "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
     "X-XSS-Protection": "1; mode=block",
     "Referrer-Policy": "strict-origin-when-cross-origin",
 }
@@ -79,6 +80,8 @@ async def _session_cleanup_loop() -> None:
             async with factory() as db:
                 await purge_expired_sessions(db)
             logger.info("Expired sessions purged")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Session cleanup failed: {e}")
 
@@ -100,6 +103,8 @@ async def _audit_cleanup_loop() -> None:
                 await db.execute(delete(AuditLog).where(AuditLog.created_at < cutoff))
                 await db.commit()
             logger.info("Audit log cleanup done (retention=%d days)", days)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Audit cleanup failed: {e}")
 
@@ -107,13 +112,14 @@ async def _audit_cleanup_loop() -> None:
 _TUNABLE_SETTINGS = {
     "llm_model", "llm_temperature", "llm_num_ctx", "llm_timeout_seconds",
     "hybrid_bm25_weight", "hybrid_knn_weight", "hybrid_k", "hybrid_score_threshold",
+    "llm_system_prompt",
 }
 
 _SETTING_TYPES: dict[str, type] = {
     "llm_temperature": float, "llm_num_ctx": int, "llm_timeout_seconds": int,
     "hybrid_bm25_weight": float, "hybrid_knn_weight": float,
     "hybrid_k": int, "hybrid_score_threshold": float,
-    "llm_model": str,
+    "llm_model": str, "llm_system_prompt": str,
 }
 
 
@@ -140,15 +146,20 @@ async def _seed_app_settings(db_factory) -> None:
         from app.db.models import AppSetting
         async with db_factory()() as db:
             await seed_ldap_config(db)
-            # Seed session_lifetime_hours if not present
-            existing = (await db.execute(
-                select(AppSetting).where(AppSetting.key == "session_lifetime_hours")
-            )).scalar_one_or_none()
-            if existing is None:
-                hours = os.getenv("SESSION_LIFETIME_HOURS", "8")
-                now = datetime.now(timezone.utc).replace(tzinfo=None)
-                db.add(AppSetting(key="session_lifetime_hours", value=hours, updated_at=now))
-                await db.commit()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _defaults = {
+                "session_lifetime_hours": os.getenv("SESSION_LIFETIME_HOURS", "8"),
+                "max_upload_mb": "50",
+                "maintenance_mode": "false",
+                "audit_retention_days": "90",
+            }
+            for key, default in _defaults.items():
+                exists = (await db.execute(
+                    select(AppSetting).where(AppSetting.key == key)
+                )).scalar_one_or_none()
+                if exists is None:
+                    db.add(AppSetting(key=key, value=default, updated_at=now))
+            await db.commit()
     except Exception as e:
         logger.warning("app_settings seed failed (table may not exist yet): %s", e)
 
@@ -224,8 +235,10 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
 
+_CSRF_ENFORCE = os.getenv("CSRF_ENFORCE", "true").lower() == "true"
+
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(CsrfMiddleware)
+app.add_middleware(CsrfMiddleware, secret=_APP_SECRET_KEY, enforce=_CSRF_ENFORCE, secure=_SECURE_COOKIES)
 app.add_middleware(AuthMiddleware)
 
 app.include_router(auth_router.router)

@@ -1,8 +1,10 @@
 """User self-service routes: profile, preferences, accessible instances."""
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models import User
 from app.db.session import get_db
 from app.schemas import InstanceOut, UserPatchRequest, user_out
 from app.services.user_service import get_user_instances
@@ -37,25 +39,25 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     """Update user's own profile (default instance, preferences)."""
-    user = request.state.user
+    # Re-fetch user in this session — request.state.user is detached (loaded by AuthMiddleware).
+    db_user = (await db.execute(select(User).where(User.id == request.state.user.id))).scalar_one()
 
     if body.default_instance_id is not None:
-        # Validate access to the instance
-        entries = await get_user_instances(db, user)
+        entries = await get_user_instances(db, db_user)
         accessible_ids = {e["instance"].id for e in entries}
         if body.default_instance_id not in accessible_ids and body.default_instance_id != -1:
             return JSONResponse({"detail": "Kein Zugriff auf diese Instanz"}, status_code=403)
-        user.default_instance_id = body.default_instance_id if body.default_instance_id != -1 else None
+        db_user.default_instance_id = body.default_instance_id if body.default_instance_id != -1 else None
 
     if body.preferences is not None:
-        current = user.preferences or {}
-        current.update(body.preferences)
-        user.preferences = current
+        current = db_user.preferences or {}
+        current.update(body.preferences.model_dump(exclude_none=True))
+        db_user.preferences = current
 
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(db_user)
     return user_out(
-        user,
+        db_user,
         is_impersonation=getattr(request.state, "is_impersonation", False),
         impersonated_by=getattr(request.state, "impersonated_by", None),
     ).model_dump(mode="json")

@@ -19,6 +19,7 @@ from app.dependencies import get_config, get_redis
 from app.loader.config import LoaderConfig
 from app.schemas import (
     AddGroupMemberRequest,
+    AdminUserCreateRequest,
     AdminUserOut,
     AdminUserPatchRequest,
     AssignGroupInstanceRequest,
@@ -28,11 +29,14 @@ from app.schemas import (
     GroupCreateRequest,
     GroupOut,
     GroupInstanceRoleOut,
+    AddInstanceMemberRequest,
     InstanceAdminOut,
     InstanceCreateRequest,
+    InstanceMemberOut,
     InstancePatchRequest,
     LDAPConfigIn,
     LDAPConfigOut,
+    LDAPSearchResult,
     PaginatedAdminUsers,
     PaginatedAuditLog,
     PaginatedGroups,
@@ -59,24 +63,130 @@ _PAGE_SIZE_USERS = 25
 _PAGE_SIZE_GROUPS = 10
 _PAGE_SIZE_AUDIT = 50
 
+_SYSTEM_PROMPT_DESCRIPTION = (
+    "Der Prompt steuert Tonalität, Sprache und Verhalten des LLM.\n\n"
+    "Pflicht-Platzhalter (müssen enthalten sein):\n"
+    "  {context}  — gefundene Dokumentenabschnitte\n"
+    "  {question} — Frage des Benutzers\n"
+    "  {history}  — bisheriger Gesprächsverlauf\n\n"
+    "Fehlt ein Platzhalter, wird beim Speichern ein Fehler gemeldet.\n\n"
+    "Hinweis für Qwen3-Modelle: /no_think am Anfang des Prompts deaktiviert "
+    "den internen Thinking-Modus. Ohne dieses Präfix werden Antworten deutlich "
+    "langsamer und beginnen mit langen internen Überlegungen.\n\n"
+    "Kontext-Budget: Der Prompt selbst belegt Tokens im LLM-Kontext (num_ctx). "
+    "Ein sehr langer Prompt reduziert den verfügbaren Platz für Dokumentenabschnitte.\n\n"
+    "Leer lassen = eingebauter Standardprompt wird verwendet."
+)
+
 _SETTINGS_SPEC: list[dict] = [
-    {"key": "llm_model",              "label": "LLM-Modell",               "type": "text",    "inputmode": None,      "min": None, "max": None,    "step": None,  "hint": "Muss in Ollama gepullt sein"},
-    {"key": "llm_temperature",        "label": "Temperature",               "type": "text",    "inputmode": "decimal", "min": 0.0,  "max": 2.0,     "step": 0.1,   "hint": "0.0 = deterministisch, 2.0 = sehr kreativ"},
-    {"key": "llm_num_ctx",            "label": "Kontext-Tokens (num_ctx)",  "type": "number",  "inputmode": None,      "min": 1024, "max": 131072,  "step": 1024,  "hint": "Kontextfenster für Ollama"},
-    {"key": "llm_timeout_seconds",    "label": "LLM-Timeout (s)",           "type": "number",  "inputmode": None,      "min": 10,   "max": 600,     "step": 10,    "hint": "Max. Wartezeit auf LLM-Antwort"},
-    {"key": "hybrid_bm25_weight",     "label": "BM25-Gewicht",              "type": "text",    "inputmode": "decimal", "min": 0.0,  "max": 1.0,     "step": 0.05,  "hint": "kNN-Gewicht = 1.0 - BM25"},
-    {"key": "hybrid_k",               "label": "hybrid_k (Chunks)",         "type": "number",  "inputmode": None,      "min": 1,    "max": 100,     "step": 1,     "hint": "Kandidaten aus OpenSearch"},
-    {"key": "hybrid_score_threshold", "label": "Score-Threshold",           "type": "text",    "inputmode": "decimal", "min": 0.0,  "max": 1.0,     "step": 0.01,  "hint": "Mindest-Score (0.0 = deaktiviert)"},
-    {"key": "session_lifetime_hours", "label": "Session-Dauer (h)",         "type": "number",  "inputmode": None,      "min": 1,    "max": 720,     "step": 1,     "hint": "Standard: 8h"},
-    {"key": "max_upload_mb",          "label": "Max. Upload-Größe (MB)",    "type": "number",  "inputmode": None,      "min": 1,    "max": 500,     "step": 1,     "hint": "Standard: 50 MB"},
-    {"key": "maintenance_mode",       "label": "Wartungsmodus",             "type": "text",    "inputmode": None,      "min": None, "max": None,    "step": None,  "hint": "true = blockiert Nicht-Admins mit 503"},
-    {"key": "audit_retention_days",   "label": "Audit-Retention (Tage)",    "type": "number",  "inputmode": None,      "min": 7,    "max": 3650,    "step": 1,     "hint": "Standard: 90 Tage"},
+    {
+        "key": "llm_model", "label": "LLM-Modell", "type": "text",
+        "inputmode": None, "min": None, "max": None, "step": None,
+        "hint": "Muss in Ollama gepullt sein", "description": None,
+    },
+    {
+        "key": "llm_temperature", "label": "Temperature", "type": "text",
+        "inputmode": "decimal", "min": 0.0, "max": 2.0, "step": 0.1,
+        "hint": "0.0 = deterministisch, 2.0 = kreativ", "description": None,
+    },
+    {
+        "key": "llm_num_ctx", "label": "Kontext-Tokens (num_ctx)", "type": "number",
+        "inputmode": None, "min": 1024, "max": 131072, "step": 1024,
+        "hint": "Kontextfenster für Ollama",
+        "description": (
+            "Wie viele Tokens das LLM gleichzeitig im Blick behalten kann. "
+            "Das Fenster enthält: System-Prompt (~150 T) + Gesprächsverlauf (~500 T) "
+            "+ gefundene Dokumenten-Chunks (~6.000 T bei 10 Chunks) + Frage (~50 T).\n\n"
+            "Standard 16.384 bietet ausreichend Puffer für die Standardkonfiguration. "
+            "Erhöhen wenn das LLM Antworten abschneidet oder Kontext verliert. "
+            "Senken wenn der GPU-VRAM knapp wird — jeder Token kostet ca. 0,5–2 MB VRAM."
+        ),
+    },
+    {
+        "key": "llm_timeout_seconds", "label": "LLM-Timeout (s)", "type": "number",
+        "inputmode": None, "min": 10, "max": 600, "step": 10,
+        "hint": "Max. Wartezeit auf LLM-Antwort", "description": None,
+    },
+    {
+        "key": "llm_system_prompt", "label": "System-Prompt (LLM)", "type": "textarea",
+        "inputmode": None, "min": None, "max": None, "step": None,
+        "hint": None, "description": _SYSTEM_PROMPT_DESCRIPTION,
+    },
+    {
+        "key": "hybrid_bm25_weight", "label": "BM25-Gewicht", "type": "text",
+        "inputmode": "decimal", "min": 0.0, "max": 1.0, "step": 0.05,
+        "hint": "kNN-Gewicht = 1.0 − BM25",
+        "description": (
+            "Die Suche kombiniert zwei Verfahren: BM25 (Volltextsuche — findet exakte Wörter) "
+            "und kNN (Vektorsuche — findet ähnliche Bedeutungen). Dieses Gewicht steuert das Verhältnis.\n\n"
+            "Empfehlungen:\n"
+            "• 0.3 / kNN 0.7 — allgemeine Texte, Berichte, freier Wortschatz\n"
+            "• 0.4 / kNN 0.6 — Standard, gute Balance (Voreinstellung)\n"
+            "• 0.5 / kNN 0.5 — technische Handbücher, Gesetze, Fachbegriffe sind kritisch\n\n"
+            "Das kNN-Gewicht wird automatisch als 1.0 − BM25-Gewicht berechnet."
+        ),
+    },
+    {
+        "key": "hybrid_k", "label": "Anzahl Treffer (hybrid_k)", "type": "number",
+        "inputmode": None, "min": 1, "max": 100, "step": 1,
+        "hint": "Dokumenten-Chunks pro Anfrage",
+        "description": (
+            "Wie viele Dokumentenabschnitte (Chunks) pro Suchanfrage an das LLM übergeben werden.\n\n"
+            "• Zu wenig (< 5): Relevante Stellen können fehlen, besonders bei breiten Fragen.\n"
+            "• Zu viel (> 20): Das LLM bekommt mehr Kontext, aber irrelevante Abschnitte "
+            "können die Antwort verwässern — und es werden mehr Tokens im Kontextfenster verbraucht.\n\n"
+            "Standard 10 ist ein guter Ausgangspunkt. Bei sehr spezifischen Fragen genügen 5–7, "
+            "bei Zusammenfassungsaufgaben können 15–20 sinnvoll sein."
+        ),
+    },
+    {
+        "key": "hybrid_score_threshold", "label": "Score-Schwelle", "type": "text",
+        "inputmode": "decimal", "min": 0.0, "max": 1.0, "step": 0.01,
+        "hint": "Mindest-Relevanz (0.0 = deaktiviert)",
+        "description": (
+            "Chunks mit einem Relevanz-Score unter diesem Wert werden verworfen, "
+            "bevor sie ans LLM übergeben werden.\n\n"
+            "• 0.0 — deaktiviert, alle Treffer werden verwendet\n"
+            "• 0.05–0.1 — Standard, filtert nur klar irrelevante Treffer\n"
+            "• 0.15–0.25 — streng, für homogene Dokumentensammlungen\n\n"
+            "Symptom für zu hohen Wert: LLM antwortet häufig 'Information nicht gefunden', "
+            "obwohl passende Dokumente vorhanden sind → Wert senken.\n"
+            "Symptom für zu niedrigen Wert: LLM zieht thematisch falsche Stellen heran → Wert erhöhen."
+        ),
+    },
+    {
+        "key": "session_lifetime_hours", "label": "Session-Dauer (h)", "type": "number",
+        "inputmode": None, "min": 1, "max": 720, "step": 1,
+        "hint": "Standard: 8h", "description": None,
+    },
+    {
+        "key": "max_upload_mb", "label": "Max. Upload-Größe (MB)", "type": "number",
+        "inputmode": None, "min": 1, "max": 500, "step": 1,
+        "hint": "Standard: 50 MB", "description": None,
+    },
+    {
+        "key": "maintenance_mode", "label": "Wartungsmodus", "type": "text",
+        "inputmode": None, "min": None, "max": None, "step": None,
+        "hint": "true | false",
+        "description": (
+            "Gültige Werte: true oder false.\n\n"
+            "Im Wartungsmodus erhalten alle Nicht-Admins einen HTTP 503 auf alle Anfragen. "
+            "Admins können weiterhin auf die Oberfläche zugreifen.\n\n"
+            "Der Wartungsmodus kann bequemer über die Seite 'Wartung' in der Navigation "
+            "ein- und ausgeschaltet werden."
+        ),
+    },
+    {
+        "key": "audit_retention_days", "label": "Audit-Retention (Tage)", "type": "number",
+        "inputmode": None, "min": 7, "max": 3650, "step": 1,
+        "hint": "Standard: 90 Tage", "description": None,
+    },
 ]
 
 _CASTMAP: dict[str, type] = {
     "llm_model": str, "llm_temperature": float, "llm_num_ctx": int,
-    "llm_timeout_seconds": int, "hybrid_bm25_weight": float,
-    "hybrid_k": int, "hybrid_score_threshold": float,
+    "llm_timeout_seconds": int, "llm_system_prompt": str,
+    "hybrid_bm25_weight": float, "hybrid_k": int, "hybrid_score_threshold": float,
     "session_lifetime_hours": int, "max_upload_mb": int,
     "maintenance_mode": str, "audit_retention_days": int,
 }
@@ -115,6 +225,7 @@ def _audit(db, user_id, action, target_type=None, target_id=None, detail=None):
 async def list_users(
     request: Request,
     page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=_PAGE_SIZE_USERS, ge=1, le=100),
     q: str = Query(default=""),
     sort: Literal["ldap_uid", "display_name", "last_login", "created_at"] = Query(default="ldap_uid"),
     order: Literal["asc", "desc"] = Query(default="asc"),
@@ -129,9 +240,9 @@ async def list_users(
         ))
 
     total = (await db.execute(select(func.count()).select_from(base_stmt.subquery()))).scalar_one()
-    total_pages = max(1, (total + _PAGE_SIZE_USERS - 1) // _PAGE_SIZE_USERS)
+    total_pages = max(1, (total + per_page - 1) // per_page)
     page = min(page, total_pages)
-    offset = (page - 1) * _PAGE_SIZE_USERS
+    offset = (page - 1) * per_page
 
     _col_map = {
         "ldap_uid": User.ldap_uid, "display_name": User.display_name,
@@ -139,7 +250,7 @@ async def list_users(
     }
     col = _col_map.get(sort, User.ldap_uid)
     ordered = nullslast(col.asc()) if order == "asc" else nullsfirst(col.desc())
-    users = (await db.execute(base_stmt.order_by(ordered).offset(offset).limit(_PAGE_SIZE_USERS))).scalars().all()
+    users = (await db.execute(base_stmt.order_by(ordered).offset(offset).limit(per_page))).scalars().all()
 
     user_ids = [u.id for u in users]
     members_by_user: dict[int, list] = {}
@@ -176,6 +287,38 @@ async def list_users(
         for u in users
     ]
     return PaginatedAdminUsers(items=items, total=total, page=page, total_pages=total_pages).model_dump(mode="json")
+
+
+@router.post("/users", status_code=201)
+async def create_user(
+    body: AdminUserCreateRequest,
+    request: Request,
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pre-create a user so they can log in when auto-registration is disabled."""
+    ldap_uid = body.ldap_uid.strip()
+    if not ldap_uid:
+        raise HTTPException(status_code=400, detail="ldap_uid darf nicht leer sein")
+
+    existing = (await db.execute(select(User).where(User.ldap_uid == ldap_uid))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="Benutzer mit dieser UID existiert bereits")
+
+    now = _now()
+    new_user = User(
+        ldap_uid=ldap_uid,
+        display_name=body.display_name,
+        email=body.email,
+        is_global_admin=body.is_global_admin,
+        is_active=True,
+        created_at=now,
+    )
+    db.add(new_user)
+    _audit(db, admin.id, "user_pre_create", "user", None, {"ldap_uid": ldap_uid})
+    await db.commit()
+    await db.refresh(new_user)
+    return user_out(new_user).model_dump(mode="json")
 
 
 async def _count_remaining_admins(db: AsyncSession, exclude_id: int, also_active: bool = False) -> int:
@@ -483,14 +626,27 @@ async def patch_admin_instance(
         instance.name = body.name.strip()
     if body.description is not None:
         instance.description = body.description.strip()
+    _SYSTEM_KEYS = {"opensearch_analyzer"}
+    _VISUAL_KEYS = ("icon", "color")
+    existing = instance.settings or {}
+    preserved_system = {k: v for k, v in existing.items() if k in _SYSTEM_KEYS}
+    preserved_visual = {k: v for k, v in existing.items() if k in _VISUAL_KEYS}
+
     if body.clear_settings:
-        instance.settings = None
+        instance.settings = {**preserved_system, **preserved_visual} or None
     elif body.settings is not None:
         _castmap = {
             "llm_model": str, "llm_temperature": float,
             "llm_num_ctx": int, "hybrid_k": int, "hybrid_score_threshold": float,
         }
-        overrides = {}
+        overrides = {**preserved_system, **preserved_visual}
+        for k in _VISUAL_KEYS:
+            raw = body.settings.get(k)
+            if raw is not None:
+                if raw == "":
+                    overrides.pop(k, None)
+                else:
+                    overrides[k] = str(raw)
         for key, cast in _castmap.items():
             raw = body.settings.get(key)
             if raw is not None and raw != "":
@@ -498,8 +654,26 @@ async def patch_admin_instance(
                     overrides[key] = cast(str(raw).replace(",", "."))
                 except (ValueError, TypeError):
                     pass
+
+        # System-Prompt: empty string = clear override; non-empty = validate + store
+        raw_prompt = body.settings.get("llm_system_prompt")
+        if raw_prompt is not None:
+            prompt_str = str(raw_prompt).strip()
+            if not prompt_str:
+                overrides.pop("llm_system_prompt", None)
+            else:
+                from app.rag import validate_system_prompt
+                missing = validate_system_prompt(prompt_str)
+                if missing:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"System-Prompt: fehlende Platzhalter {missing}. Erforderlich: {{context}}, {{question}}, {{history}}",
+                    )
+                overrides["llm_system_prompt"] = prompt_str
+
         instance.settings = overrides or None
 
+    _audit(db, admin.id, "instance_patch", "instance", instance.id, {"name": instance.name})
     instance.updated_at = _now()
     from app.loader.vector_store import invalidate_instance_cache
     invalidate_instance_cache(instance.slug)
@@ -520,9 +694,78 @@ async def delete_admin_instance(
     instance = (await db.execute(select(Instance).where(Instance.id == instance_id))).scalar_one_or_none()
     if not instance:
         return
-    _audit(db, admin.id, "instance_delete", "instance", instance_id, {"slug": instance.slug})
-    await db.commit()
+    slug = instance.slug
     await delete_instance(db, config, instance_id, redis)
+    _audit(db, admin.id, "instance_delete", "instance", instance_id, {"slug": slug})
+    await db.commit()
+
+
+@router.get("/instances/{instance_id}/members")
+async def list_instance_members(
+    instance_id: int,
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (await db.execute(
+        select(InstanceMember, User)
+        .join(User, InstanceMember.user_id == User.id)
+        .where(InstanceMember.instance_id == instance_id)
+        .order_by(User.ldap_uid)
+    )).all()
+    return [
+        InstanceMemberOut(
+            user_id=user.id, ldap_uid=user.ldap_uid,
+            display_name=user.display_name, role=mem.role,
+        ).model_dump()
+        for mem, user in rows
+    ]
+
+
+@router.post("/instances/{instance_id}/members", status_code=201)
+async def add_instance_member(
+    instance_id: int,
+    body: AddInstanceMemberRequest,
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    instance = (await db.execute(select(Instance).where(Instance.id == instance_id))).scalar_one_or_none()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instanz nicht gefunden")
+    user = (await db.execute(select(User).where(User.id == body.user_id))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+
+    existing = (await db.execute(
+        select(InstanceMember).where(
+            InstanceMember.user_id == body.user_id,
+            InstanceMember.instance_id == instance_id,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        existing.role = body.role
+    else:
+        db.add(InstanceMember(user_id=body.user_id, instance_id=instance_id, role=body.role, added_by=admin.id))
+    _audit(db, admin.id, "instance_member_add", "instance", instance_id, {"user_id": body.user_id, "role": body.role})
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/instances/{instance_id}/members/{user_id}", status_code=204)
+async def remove_instance_member(
+    instance_id: int, user_id: int,
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    mem = (await db.execute(
+        select(InstanceMember).where(
+            InstanceMember.user_id == user_id,
+            InstanceMember.instance_id == instance_id,
+        )
+    )).scalar_one_or_none()
+    if mem:
+        db.delete(mem)
+        _audit(db, admin.id, "instance_member_remove", "instance", instance_id, {"user_id": user_id})
+        await db.commit()
 
 
 @router.post("/instances/{instance_id}/rebuild-redis")
@@ -632,6 +875,7 @@ async def list_groups(
 @router.post("/groups", status_code=201)
 async def create_group(
     body: GroupCreateRequest,
+    request: Request,
     admin=Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -643,17 +887,21 @@ async def create_group(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Gruppenname bereits vergeben")
     group = (await db.execute(select(Group).where(Group.name == body.name))).scalar_one()
+    _audit(db, admin.id, "group_create", "group", group.id, {"name": group.name})
+    await db.commit()
     return GroupOut(id=group.id, name=group.name, ldap_group_dn=group.ldap_group_dn, created_at=group.created_at).model_dump(mode="json")
 
 
 @router.delete("/groups/{group_id}", status_code=204)
 async def delete_group(
     group_id: int,
+    request: Request,
     admin=Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     group = (await db.execute(select(Group).where(Group.id == group_id))).scalar_one_or_none()
     if group:
+        _audit(db, admin.id, "group_delete", "group", group_id, {"name": group.name})
         db.delete(group)
         await db.commit()
 
@@ -743,17 +991,7 @@ async def get_settings(
     rows = (await db.execute(select(AppSetting))).scalars().all()
     settings = [SettingOut(key=r.key, value=r.value, updated_at=r.updated_at) for r in rows]
     spec = [SettingSpec(**s) for s in _SETTINGS_SPEC]
-    config_snapshot = {
-        "llm_model": config.llm_model,
-        "llm_temperature": config.llm_temperature,
-        "llm_num_ctx": config.llm_num_ctx,
-        "llm_timeout_seconds": config.llm_timeout_seconds,
-        "hybrid_bm25_weight": config.hybrid_bm25_weight,
-        "hybrid_knn_weight": config.hybrid_knn_weight,
-        "hybrid_k": config.hybrid_k,
-        "hybrid_score_threshold": config.hybrid_score_threshold,
-    }
-    return SettingsResponse(settings=settings, spec=spec, config_snapshot=config_snapshot).model_dump(mode="json")
+    return SettingsResponse(settings=settings, spec=spec, config_snapshot={}).model_dump(mode="json")
 
 
 @router.patch("/settings")
@@ -765,9 +1003,28 @@ async def update_settings(
     config: LoaderConfig = Depends(get_config),
 ):
     new_values: dict = {}
+    delete_keys: list[str] = []
     errors: list[str] = []
 
+    from app.rag import validate_system_prompt
+
     for key, raw in body.values.items():
+        # System-Prompt: no comma-stripping; empty string = delete (revert to built-in default)
+        if key == "llm_system_prompt":
+            raw_str = str(raw)
+            if not raw_str.strip():
+                delete_keys.append(key)
+                continue
+            missing = validate_system_prompt(raw_str)
+            if missing:
+                errors.append(
+                    f"System-Prompt: fehlende Platzhalter {missing}. "
+                    "Erforderlich: {context}, {question}, {history}"
+                )
+                continue
+            new_values[key] = raw_str
+            continue
+
         cast = _CASTMAP.get(key, str)
         raw_str = str(raw).strip().replace(",", ".")
         if not raw_str:
@@ -793,6 +1050,14 @@ async def update_settings(
             raise HTTPException(status_code=422, detail=msg)
 
     now = _now()
+    # Delete cleared settings (e.g. system prompt reset to built-in default)
+    for key in delete_keys:
+        existing = (await db.execute(select(AppSetting).where(AppSetting.key == key))).scalar_one_or_none()
+        if existing:
+            await db.delete(existing)
+        if hasattr(config, key):
+            new_values[key] = ""  # reflect in-memory reset
+
     for key, val in new_values.items():
         existing = (await db.execute(select(AppSetting).where(AppSetting.key == key))).scalar_one_or_none()
         if existing:
@@ -858,6 +1123,7 @@ async def get_ldap(
         ldap_bind_dn=cfg.get("ldap_bind_dn", ""),
         ldap_bind_password_set=bool(cfg.get("ldap_bind_password")),
         ldap_enabled=cfg.get("ldap_enabled", "true").lower() not in ("false", "0", "off"),
+        ldap_allow_auto_registration=cfg.get("ldap_allow_auto_registration", "true").lower() not in ("false", "0", "off"),
     ).model_dump()
 
 
@@ -870,6 +1136,7 @@ async def update_ldap(
 ):
     data = body.model_dump(exclude={"ldap_bind_password"})
     data["ldap_enabled"] = "true" if body.ldap_enabled else "false"
+    data["ldap_allow_auto_registration"] = "true" if body.ldap_allow_auto_registration else "false"
     if body.ldap_bind_password is not None:
         data["ldap_bind_password"] = body.ldap_bind_password
     await save_ldap_config(db, data, updated_by=admin.id)
@@ -889,7 +1156,207 @@ async def update_ldap(
         ldap_bind_dn=cfg.get("ldap_bind_dn", ""),
         ldap_bind_password_set=bool(cfg.get("ldap_bind_password")),
         ldap_enabled=cfg.get("ldap_enabled", "true").lower() not in ("false", "0", "off"),
+        ldap_allow_auto_registration=cfg.get("ldap_allow_auto_registration", "true").lower() not in ("false", "0", "off"),
     ).model_dump()
+
+
+@router.post("/ldap/test")
+async def test_ldap(
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Test LDAP connectivity using the stored bind credentials."""
+    import asyncio as _asyncio
+    from ldap3 import Server, Connection, ALL
+    from ldap3.core.exceptions import LDAPException
+
+    cfg = await get_ldap_config(db)
+    ldap_url = cfg.get("ldap_url", "")
+    bind_dn = cfg.get("ldap_bind_dn", "")
+    bind_pw = cfg.get("ldap_bind_password", "")
+
+    def _do_test():
+        try:
+            server = Server(ldap_url, get_info=ALL, connect_timeout=5)
+            conn = Connection(
+                server,
+                user=bind_dn or None,
+                password=bind_pw or None,
+                auto_bind=True,
+            )
+            conn.unbind()
+            return {"ok": True, "error": None}
+        except LDAPException as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    return await _asyncio.to_thread(_do_test)
+
+
+@router.post("/ldap/search")
+async def search_ldap_users(
+    request: Request,
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search LDAP for users matching a query string. Requires Bind DN to be configured."""
+    import asyncio as _asyncio
+    from ldap3 import Server, Connection, ALL, SUBTREE
+    from ldap3.core.exceptions import LDAPException
+    from ldap3.utils.conv import escape_filter_chars
+
+    body = await request.json()
+    query = str(body.get("query", "")).strip()
+
+    cfg = await get_ldap_config(db)
+    ldap_url = cfg.get("ldap_url", "")
+    bind_dn = cfg.get("ldap_bind_dn", "")
+    bind_pw = cfg.get("ldap_bind_password", "")
+    search_base = cfg.get("ldap_user_search_base", "")
+    uid_attr = cfg.get("ldap_uid_attr", "uid")
+    dn_attr = cfg.get("ldap_display_name_attr", "displayName")
+    mail_attr = cfg.get("ldap_mail_attr", "mail")
+    user_filter = cfg.get("ldap_user_filter", "(objectClass=inetOrgPerson)")
+
+    if not bind_dn:
+        raise HTTPException(status_code=400, detail="Kein Bind-DN konfiguriert. LDAP-Suche erfordert einen Service-Account.")
+
+    def _do_search():
+        try:
+            server = Server(ldap_url, get_info=ALL, connect_timeout=5)
+            conn = Connection(server, user=bind_dn, password=bind_pw or None, auto_bind=True)
+
+            if query:
+                escaped = escape_filter_chars(query)
+                search_filter = f"(&{user_filter}(|({uid_attr}=*{escaped}*)({dn_attr}=*{escaped}*)({mail_attr}=*{escaped}*)))"
+            else:
+                search_filter = user_filter
+
+            conn.search(
+                search_base=search_base,
+                search_filter=search_filter,
+                search_scope=SUBTREE,
+                attributes=[uid_attr, dn_attr, mail_attr],
+                size_limit=50,
+            )
+
+            results = []
+            for entry in conn.entries:
+                uid_val = getattr(entry, uid_attr, None)
+                if not uid_val or not uid_val.value:
+                    continue
+                results.append({
+                    "ldap_uid": str(uid_val.value),
+                    "display_name": str(getattr(entry, dn_attr).value) if getattr(entry, dn_attr, None) and getattr(entry, dn_attr).value else None,
+                    "email": str(getattr(entry, mail_attr).value) if getattr(entry, mail_attr, None) and getattr(entry, mail_attr).value else None,
+                })
+            conn.unbind()
+            return results
+        except LDAPException as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    try:
+        results = await _asyncio.to_thread(_do_search)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=f"LDAP-Fehler: {exc}") from exc
+
+    existing_uids = {
+        row[0] for row in (await db.execute(select(User.ldap_uid))).all()
+    }
+    return [
+        LDAPSearchResult(
+            ldap_uid=r["ldap_uid"],
+            display_name=r["display_name"],
+            email=r["email"],
+        ).model_dump()
+        for r in results
+        if r["ldap_uid"] not in existing_uids
+    ]
+
+
+@router.post("/ldap/sync")
+async def sync_ldap(
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sync display_name, email and admin-group membership for all active users via LDAP bind-dn search."""
+    import asyncio as _asyncio
+    from ldap3 import Server, Connection, ALL
+    from ldap3.core.exceptions import LDAPException
+    from ldap3.utils.conv import escape_filter_chars
+
+    cfg = await get_ldap_config(db)
+    ldap_url = cfg.get("ldap_url", "")
+    search_base = cfg.get("ldap_user_search_base", "")
+    uid_attr = cfg.get("ldap_uid_attr", "uid")
+    dn_attr = cfg.get("ldap_display_name_attr", "displayName")
+    mail_attr = cfg.get("ldap_mail_attr", "mail")
+    admin_group_dn = cfg.get("ldap_admin_group_dn", "")
+    bind_dn = cfg.get("ldap_bind_dn", "")
+    bind_pw = cfg.get("ldap_bind_password", "")
+
+    users = (await db.execute(select(User).where(User.is_active == True))).scalars().all()  # noqa: E712
+
+    synced = 0
+    errors = 0
+
+    def _sync_user(ldap_uid: str):
+        try:
+            server = Server(ldap_url, get_info=ALL, connect_timeout=5)
+            conn = Connection(server, user=bind_dn or None, password=bind_pw or None, auto_bind=True)
+            conn.search(
+                search_base=search_base,
+                search_filter=f"({uid_attr}={escape_filter_chars(ldap_uid)})",
+                attributes=[uid_attr, dn_attr, mail_attr],
+            )
+            if not conn.entries:
+                conn.unbind()
+                return None
+            entry = conn.entries[0]
+            result = {
+                "display_name": str(getattr(entry, dn_attr, ldap_uid) or ldap_uid),
+                "email": str(getattr(entry, mail_attr, "") or ""),
+                "is_global_admin": False,
+            }
+            if admin_group_dn:
+                user_dn = f"{uid_attr}={ldap_uid},{search_base}"
+                conn.search(
+                    search_base=admin_group_dn,
+                    search_filter=f"(member={escape_filter_chars(user_dn)})",
+                    attributes=["cn"],
+                )
+                result["is_global_admin"] = len(conn.entries) > 0
+            conn.unbind()
+            return result
+        except LDAPException:
+            return None
+        except Exception:
+            return None
+
+    for user in users:
+        if not user.ldap_uid or user.local_password_hash:
+            continue
+        try:
+            ldap_data = await _asyncio.to_thread(_sync_user, user.ldap_uid)
+            if ldap_data:
+                user.display_name = ldap_data["display_name"]
+                user.email = ldap_data["email"]
+                if admin_group_dn:
+                    user.is_global_admin = ldap_data["is_global_admin"]
+                synced += 1
+            else:
+                errors += 1
+        except Exception:
+            errors += 1
+
+    if synced:
+        await db.commit()
+
+    _audit(db, admin.id, "ldap_sync", detail={"synced": synced, "errors": errors})
+    await db.commit()
+
+    return {"synced": synced, "errors": errors}
 
 
 # ─── System status ────────────────────────────────────────────────────────────
@@ -961,6 +1428,45 @@ async def system_status(
     from app import __version__
     status["app_version"] = __version__
     return status
+
+
+# ─── Maintenance mode ─────────────────────────────────────────────────────────
+
+@router.get("/maintenance")
+async def get_maintenance(
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    row = (await db.execute(
+        select(AppSetting).where(AppSetting.key == "maintenance_mode")
+    )).scalar_one_or_none()
+    active = row is not None and row.value.lower() in ("1", "true", "on")
+    return {"maintenance_mode": active}
+
+
+@router.post("/maintenance")
+async def set_maintenance(
+    body: dict,
+    request: Request,
+    admin=Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    enabled = bool(body.get("enabled", False))
+    value = "true" if enabled else "false"
+    now = _now()
+    existing = (await db.execute(
+        select(AppSetting).where(AppSetting.key == "maintenance_mode")
+    )).scalar_one_or_none()
+    if existing:
+        existing.value = value
+        existing.updated_at = now
+        existing.updated_by = admin.id
+    else:
+        db.add(AppSetting(key="maintenance_mode", value=value, updated_at=now, updated_by=admin.id))
+    _audit(db, admin.id, "maintenance_mode_change", detail={"enabled": enabled})
+    await db.commit()
+    invalidate_maintenance_cache()
+    return {"maintenance_mode": enabled}
 
 
 # ─── Audit log ────────────────────────────────────────────────────────────────

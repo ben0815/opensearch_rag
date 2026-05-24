@@ -1,7 +1,8 @@
 import json
 import os
 import tempfile
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from typing import Annotated
+from fastapi import APIRouter, Depends, File, HTTPException, Path, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,13 +98,13 @@ async def upload_documents(
             tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                    tmp_path = tmp.name
                     while chunk := await upload.read(1024 * 1024):
                         total_bytes += len(chunk)
                         if total_bytes > max_bytes:
                             size_exceeded = True
                             break
                         tmp.write(chunk)
-                    tmp_path = tmp.name
 
                 if size_exceeded:
                     raise ValueError(f'Datei zu groß (max. {max_bytes // (1024 * 1024)} MB).')
@@ -157,7 +158,7 @@ async def upload_documents(
 @router.delete("/{instance_id}/{file_hash}", status_code=204)
 async def delete_document_route(
     instance_id: int,
-    file_hash: str,
+    file_hash: Annotated[str, Path(pattern=r"^[a-f0-9]{64}$")],
     request: Request,
     db: AsyncSession = Depends(get_db),
     config: LoaderConfig = Depends(get_config),
