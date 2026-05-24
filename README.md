@@ -7,13 +7,13 @@ Multi-mandantenfähige RAG-Anwendung (Retrieval-Augmented Generation) auf Basis 
 - **Multi-Tenant**: Instanzen (Dokumentsammlungen) mit Rollen `viewer` (Chat) und `manager` (Upload/Löschen)
 - **Hybrid Search**: BM25 + kNN mit konfigurierbaren Gewichten, Score-Normalisierung via OpenSearch Pipeline
 - **SSE-Streaming**: LLM-Antworten und Upload-Fortschritt werden live gestreamt
-- **LDAP-Auth**: Bind als Benutzer, Account-Status-Prüfung (`pwdAccountLockedTime`, `shadowExpire`), optionaler Admin-Gruppen-Check; lokaler bcrypt-Fallback für Bootstrap-Admin
-- **Admin-UI**: Instanzen, Gruppen und Benutzer verwalten; globale LLM/Such-Parameter live anpassbar; System-Status-Dashboard; per-Instanz BM25-Sprachanalyzer und LLM-Parameter konfigurierbar
+- **LDAP-Auth**: Search-then-Bind (wenn Bind-DN konfiguriert) oder Direct-Bind; Account-Status-Prüfung (`pwdAccountLockedTime`, `shadowExpire`); optionaler Admin-Gruppen-Check; lokaler bcrypt-Fallback für Bootstrap-Admin
+- **Admin-UI**: Instanzen, Gruppen und Benutzer verwalten; Benutzer vorab anlegen (inkl. LDAP-Suche); Instanzen mit Icon und Farbe kennzeichnen; direkte Benutzer-Zuweisung zu Instanzen mit Rollenwahl (Leser/Manager); globale LLM/Such-Parameter live anpassbar; System-Prompt konfigurierbar (global und pro Instanz); System-Status-Dashboard; per-Instanz BM25-Sprachanalyzer und LLM-Parameter konfigurierbar
 - **Chat-Verlauf**: durchsuchbar, nach Instanz filterbar; letzten 3 Frage/Antwort-Paare fließen als Gesprächskontext in Folgefragen ein
 - **Rate Limiting**: Login auf 10 Versuche/Minute, Chat-Stream auf 30 Anfragen/Minute begrenzt
-- **CSRF-Schutz**: Double-Submit-Cookie-Muster (HMAC-SHA256, stdlib); alle POST-Formulare und Fetch-Requests abgesichert; `CSRF_ENFORCE=false` für Log-only-Modus bei schrittweiser Einführung
-- **Flash-Nachrichten**: serverseitige Statusmeldungen nach Redirects (httponly Cookies, max. 30 s Lebensdauer)
-- **Fehlerseiten**: eigene HTML-Seiten für 404, 403 und 500
+- **CSRF-Schutz**: Double-Submit-Cookie-Muster (HMAC-SHA256, stdlib); alle Fetch-Requests abgesichert; `CSRF_ENFORCE=false` für Log-only-Modus
+- **Wartungsmodus**: per Admin-UI aktivierbar; blockiert Nicht-Admins mit 503; Impersonation (Als Benutzer anmelden) für Support-Zwecke
+- **Audit-Log**: alle sicherheitsrelevanten Aktionen (Login, fehlgeschlagene Logins, Dokumenten-Uploads/-Löschungen, Admin-Änderungen) mit konfigurierbarer Aufbewahrungszeit
 
 ## Voraussetzungen
 
@@ -221,7 +221,7 @@ Steuert, wie kreativ oder deterministisch das LLM antwortet:
 
 Wie lange die App auf eine vollständige LLM-Antwort wartet, bevor die Verbindung abbricht. Große Modelle oder lange Antworten brauchen mehr Zeit.
 
-**Kopplung mit dem Frontend**: Der Browser-seitige Timeout wird automatisch aus `LLM_TIMEOUT_SECONDS + 30 s` berechnet und über ein `data-stream-timeout`-Attribut auf einem versteckten `<div id="chat-config">` an `chat.js` übergeben. Eine manuelle Anpassung in `chat.js` ist nicht nötig.
+**Kopplung mit dem Frontend**: Der React-Client verwendet `LLM_TIMEOUT_SECONDS + 30 s` als SSE-Timeout (konfiguriert über den `/api/admin/settings`-Endpunkt; Standard 240 s). Eine Anpassung ist ausschließlich über die Admin-UI oder `infra/.env` nötig.
 
 #### `LLM_NUM_CTX` (Standard: 16384)
 
@@ -235,11 +235,40 @@ Grobe Schätzung für die Standardkonfiguration:
 
 Ein zu kleines Kontextfenster führt dazu, dass Ollama Chunks stillschweigend abschneidet, was die Antwortqualität verschlechtert. Ein zu großes Fenster belegt mehr GPU-VRAM.
 
+#### System-Prompt
+
+Der System-Prompt gibt dem LLM seine "Rolle" vor — er steuert Tonalität, Sprache und Verhalten bei fehlenden Informationen. Er ist über die Admin-UI konfigurierbar und kann pro Instanz überschrieben werden.
+
+**Konfiguration:**
+- **Globaler Standard**: Admin → Einstellungen → *System-Prompt (LLM)*
+- **Pro Instanz**: Instanz bearbeiten → Tab *Einstellungen* → Abschnitt *Instanz-Overrides* → *System-Prompt*
+
+**Pflicht-Platzhalter** — müssen im Prompt enthalten sein:
+
+| Platzhalter | Bedeutung |
+|---|---|
+| `{context}` | Die gefundenen Dokumentenabschnitte aus OpenSearch |
+| `{question}` | Die Frage des Benutzers |
+| `{history}` | Der bisherige Gesprächsverlauf (kann leer sein) |
+
+Fehlt ein Platzhalter, wird der Prompt beim Speichern abgewiesen. Ist ein gespeicherter Prompt trotzdem ungültig (z.B. nach manueller DB-Änderung), fällt das System zur Laufzeit auf den eingebauten Standard zurück und protokolliert eine Warnung.
+
+**Hinweis für Qwen3-Modelle:** Der eingebaute Standardprompt beginnt mit `/no_think`. Dieses Präfix deaktiviert den internen "Thinking"-Modus von Qwen3. Ohne es arbeitet das Modell im Reasoning-Modus: Antworten werden deutlich langsamer und beginnen mit langen internen Überlegungen — in den meisten RAG-Anwendungen unerwünscht.
+
+**Kontext-Budget:** Der Prompt selbst belegt Tokens im LLM-Kontext (`LLM_NUM_CTX`). Ein sehr langer Prompt reduziert den verfügbaren Platz für Dokumentenabschnitte. Der eingebaute Standard belegt ca. 150 Tokens.
+
+**Leer lassen = eingebauter Standard.** Weder ein globaler noch ein instanzspezifischer Prompt muss konfiguriert werden — das System funktioniert ohne weitere Einrichtung.
+
+**Typische Anwendungsfälle für per-Instanz-Prompts:**
+- Andere Antwortsprache (z.B. Englisch für internationale Nutzer)
+- Fachgebiet-spezifische Anweisung (z.B. "Antworte immer mit Paragraphen-Referenzen")
+- Abweichende Tonalität (formell vs. informell)
+
 ---
 
 ### LDAP-Konfiguration
 
-Die App authentifiziert Benutzer über LDAP (z.B. Active Directory oder OpenLDAP). Beim Login wird ein LDAP-Bind als der Benutzer selbst durchgeführt — das Passwort verlässt niemals die App.
+Die App authentifiziert Benutzer über LDAP (z.B. Active Directory oder OpenLDAP). Ist ein Bind-DN konfiguriert, wird Search-then-Bind verwendet: Die App verbindet sich als Service-Account, sucht den echten DN des Benutzers und führt dann einen Bind mit dessen Passwort durch. Ohne Bind-DN wird ein Direct-Bind mit einem konstruierten DN versucht. Das Passwort verlässt niemals die App.
 
 | Variable | Bedeutung |
 |---|---|
@@ -252,7 +281,8 @@ Die App authentifiziert Benutzer über LDAP (z.B. Active Directory oder OpenLDAP
 | `LDAP_UID_ATTR` | LDAP-Attribut, das den Benutzernamen enthält. Standard: `uid`. AD: `sAMAccountName` |
 | `LDAP_DISPLAY_NAME_ATTR` | Attribut für den Anzeigenamen. Standard: `displayName` |
 | `LDAP_MAIL_ATTR` | Attribut für die E-Mail-Adresse. Standard: `mail` |
-| `LDAP_ADMIN_GROUP_DN` | Optional: DN einer LDAP-Gruppe, deren Mitglieder automatisch globale Admins werden, z.B. `cn=rag-admins,ou=groups,dc=firma,dc=de` |
+| `LDAP_ADMIN_GROUP_DN` | Optional: DN einer LDAP-Gruppe, deren Mitglieder automatisch globale Admins werden, z.B. `cn=rag-admins,ou=groups,dc=firma,dc=de`. Nur wenn gesetzt, wird `is_global_admin` beim Login aus LDAP synchronisiert — manuell gesetzte Admin-Rechte bleiben sonst erhalten. |
+| `LDAP_ALLOW_AUTO_REGISTRATION` | Standard: `true`. `false` = Nur vorab durch Admins angelegte Benutzer dürfen sich einloggen. Neue LDAP-Benutzer werden nicht automatisch angelegt. |
 
 Die App prüft beim Login zusätzlich:
 - `pwdAccountLockedTime`: Ist das Konto gesperrt?
@@ -414,24 +444,34 @@ FastAPI (app_fastapi.py)
   ├── CsrfMiddleware             — Double-Submit-Cookie (HMAC-SHA256); 403 bei ungültigem Token
   ├── AuthMiddleware             — Session-Cookie → 401 JSON bei fehlender/abgelaufener Session
   │
-  ├── POST /api/auth/login       — LDAP-Bind oder lokaler bcrypt-Check → Session-Cookie
+  ├── POST /api/auth/login           — LDAP-Bind oder lokaler bcrypt-Check → Session-Cookie
   ├── POST /api/auth/logout
   ├── GET  /api/auth/me
   │
-  ├── GET  /api/instances        — Instanzen des eingeloggten Benutzers
-  ├── POST /api/chat/stream      — SSE: event:sources → data:token … → event:done (history_id)
-  ├── GET/DELETE /api/chat/history*
+  ├── GET  /api/instances            — Instanzen des eingeloggten Benutzers (mit Rolle)
+  ├── PATCH /api/users/me            — Eigenes Profil (Sprache, Theme, Standard-Instanz)
   │
-  ├── GET  /api/documents/{id}   — Dokumentenliste einer Instanz
-  ├── POST /api/documents/{id}/upload  — SSE-Fortschritt pro Datei
-  ├── DELETE /api/documents/{id}/{hash}
+  ├── POST /api/chat/stream          — SSE: event:sources → data:token … → event:done
+  ├── GET/DELETE /api/chat/history*  — Paginierter Verlauf, filterbar nach Instanz
   │
-  └── /api/admin/*               — Users, Instances, Groups, Settings, LDAP, Status, Audit
-         │
-         ├── PostgreSQL   — User, Instance, Group, Session, ChatHistory, AuditLog, AppSetting
-         ├── Redis         — DocumentMetadata als JSON (doc:{slug}:{sha256})
-         └── OpenSearch    — documents_{slug}: knn_vector + text (BM25)
-                                └── Hybrid Pipeline: min_max + arithmetic_mean
+  ├── GET    /api/documents/{id}
+  ├── POST   /api/documents/{id}/upload     — SSE-Fortschritt pro Datei
+  ├── DELETE /api/documents/{id}/{hash}     — hash: 64-stellige SHA-256-Hex
+  │
+  └── /api/admin/*               — Nur Global-Admins
+         ├── users               CRUD, Admin-/Aktiv-Toggle, Impersonation
+         ├── instances           CRUD, per-Instanz LLM-Overrides
+         ├── groups              CRUD, Instanz- und Benutzer-Zuweisungen
+         ├── settings            Globale LLM/Such-Parameter live anpassbar
+         ├── ldap                LDAP-Konfiguration, Test-Verbindung, Benutzer-Sync
+         ├── maintenance         Wartungsmodus (blockiert Nicht-Admins mit 503)
+         ├── status              System-Health (OpenSearch, Ollama, Redis, PostgreSQL)
+         └── audit               Audit-Log mit Retention-Konfiguration
+                │
+                ├── PostgreSQL   — User, Instance, Group, Session, ChatHistory, AuditLog, AppSetting
+                ├── Redis        — DocumentMetadata als JSON (doc:{slug}:{sha256})
+                └── OpenSearch   — documents_{slug}: knn_vector + text (BM25)
+                                      └── Hybrid Pipeline: min_max + arithmetic_mean
 
   GET /{alles andere}            — index.html (React Router übernimmt client-seitiges Routing)
 ```

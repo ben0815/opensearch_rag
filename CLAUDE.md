@@ -88,13 +88,13 @@ opensearch_rag/
     ├── dependencies.py               # FastAPI-Abhängigkeiten: get_config(), get_redis(), limiter (slowapi)
     ├── auth/
     │   ├── ldap_service.py           # LDAP-Authentifizierung (synchron — in asyncio.to_thread aufrufen)
-    │   ├── middleware.py             # AuthMiddleware: Session-Token aus Cookie prüfen
-    │   ├── session.py               # create_session(), get_user_by_token(), purge_expired_sessions()
-    │   └── csrf.py                  # CsrfMiddleware: Double-Submit-Cookie (HMAC-SHA256); setzt request.state.csrf_token
+    │   ├── middleware.py             # AuthMiddleware: API→401 JSON; SPA-Pfade ohne Auth durchlassen
+    │   ├── session.py               # create_session(), get_user_and_session_by_token(), purge_expired_sessions()
+    │   └── csrf.py                  # CsrfMiddleware: Double-Submit-Cookie (HMAC-SHA256)
     ├── cli/
-    │   └── admin.py                  # CLI: python -m app.cli.admin create-admin <user> <pass>
+    │   └── admin.py                  # CLI: create-admin, rotate-encryption-key, generate-encryption-key
     ├── db/
-    │   ├── models.py                 # SQLAlchemy-Modelle: User, Instance, Group, ChatHistory, Session
+    │   ├── models.py                 # SQLAlchemy-Modelle: User, Instance, Group, ChatHistory, Session, AuditLog, AppSetting
     │   └── session.py               # AsyncEngine + get_session_factory()
     ├── loader/
     │   ├── config.py                 # LoaderConfig: liest alle Env-Vars via os.getenv()
@@ -105,19 +105,20 @@ opensearch_rag/
     ├── metadata/
     │   └── redis_service.py          # RedisMetadataService: speichert DocumentMetadata als JSON
     ├── routes/
-    │   ├── auth.py                   # /login, /logout
-    │   ├── chat.py                   # /chat, /chat/stream (SSE), /chat/history
-    │   ├── documents.py              # /documents, /documents/upload (SSE), /documents/delete/{hash}
-    │   └── admin.py                  # /admin/instances, /admin/groups, /admin/users
+    │   ├── auth.py                   # /api/auth/login (Rate: 10/min), /api/auth/logout, /api/auth/me
+    │   ├── user.py                   # /api/instances, /api/users/me
+    │   ├── chat.py                   # /api/chat/stream (SSE), /api/chat/history
+    │   ├── documents.py              # /api/documents/{id}, /upload (SSE), /{hash} (DELETE)
+    │   └── admin.py                  # /api/admin/: users, instances, groups, settings, ldap, maintenance, status, audit
     ├── services/
-    │   ├── chat_service.py           # stream_answer(question, slug, config, history) (SSE-Generator), save_to_history()
+    │   ├── chat_service.py           # stream_answer() (SSE-Generator), save_to_history()
+    │   ├── config_service.py         # get_effective_config(), get_ldap_config(), is_maintenance_mode(), set_app_setting()
     │   ├── document_service.py       # get_document_processor(), list_documents(), delete_document()
     │   ├── instance_service.py       # create_instance(), delete_instance() (inkl. OpenSearch-Index)
     │   └── user_service.py           # get_user_instances(), get_effective_role()
     └── utils/
         ├── logging_config.py         # setup_logger(): strukturiertes Logging
-        ├── templates.py              # Jinja2-Singleton; Filter: url_encode; Global: csrf_input(request)
-        └── flash.py                  # set_flash(), read_flash(), clear_flash() — einmalige Statusmeldungen via httponly Cookies
+        └── crypto.py                 # encrypt()/decrypt() via Fernet (optional, für LDAP-Bind-Passwort)
 ```
 
 ## Architektur-Entscheidungen
@@ -141,6 +142,21 @@ PDF → fitz (PyMuPDF) → Seiten-Text
 **Token-basiertes Chunking:** `CHUNK_SIZE` und `CHUNK_OVERLAP` sind in **Tokens** (nicht Zeichen). Der HuggingFace-Tokenizer wird über `_load_tokenizer()` in `chunk_splitter.py` bereitgestellt (`@lru_cache(maxsize=4)` — prozessweit gecacht pro Modell-ID). Sowohl `DocumentProcessor` als auch `ChunkSplitter` rufen `_load_tokenizer()` auf, laden den Tokenizer aber nur einmal tatsächlich. Beim ersten App-Start wird der `BAAI/bge-m3`-Tokenizer (XLM-RoBERTa SentencePiece) von HuggingFace Hub heruntergeladen (~1 MB) — im Docker-Image ist er vorgebaut.
 
 **Duplikat-Erkennung:** SHA-256-Hash der Datei wird vor der Verarbeitung gegen Redis geprüft. Bereits indizierte Dateien werden übersprungen.
+
+### RAG-Prompt — `rag.py`
+
+`DEFAULT_SYSTEM_PROMPT` (Modul-Konstante) enthält den eingebauten Standardprompt mit `/no_think`-Präfix für Qwen3.
+
+`_build_prompt_template(custom_prompt: str) -> PromptTemplate` — baut bei jedem Chat-Aufruf ein `PromptTemplate` aus `config.llm_system_prompt`. Fällt auf `_PROMPT_TEMPLATE` (Default) zurück wenn: leer, Pflicht-Platzhalter fehlen (`{context}`, `{question}`, `{history}`), oder LangChain-Parsing schlägt fehl. Loggt in jedem Fallback-Fall eine Warning.
+
+`validate_system_prompt(prompt: str) -> list[str]` — gibt fehlende Platzhalter zurück (leere Liste = gültig). Wird in `routes/admin.py → update_settings` serverseitig vor dem Speichern aufgerufen.
+
+`generate_stream()` verwendet `_build_prompt_template(getattr(config, "llm_system_prompt", ""))` — `getattr` mit Default schützt gegen fehlendes Feld auf gecachten Instanzen.
+
+`config.llm_system_prompt` wird über drei Ebenen aufgelöst:
+1. `LoaderConfig.__init__()` setzt `llm_system_prompt = ""` (Default)
+2. `app_fastapi._load_db_settings()` überschreibt mit gespeichertem Wert aus `app_settings`-Tabelle beim Start
+3. `get_effective_config()` in `config_service.py` wendet per-Instanz-Override aus `Instance.settings` an
 
 ### Retrieval — Hybrid Search in `rag.retrieve()`
 
@@ -177,7 +193,13 @@ FastAPI läuft auf uvicorn (asyncio). Alle blockierenden I/O-Operationen werden 
 Redis-Operationen sind nativ async (`redis.asyncio`).
 
 ### Authentifizierung
-Login via LDAP (`ldap_service.authenticate()`): Bind als Benutzer, prüft `pwdAccountLockedTime` und `shadowExpire`. Optional: LDAP-Gruppen-Check für Global-Admin-Status (`LDAP_ADMIN_GROUP_DN`). Fallback: lokales Passwort-Hash (bcrypt) für Admin-Bootstrap ohne LDAP.
+Login via LDAP (`ldap_service.authenticate()`): Wenn `ldap_bind_dn` konfiguriert ist, wird Search-then-Bind verwendet (Service-Account sucht den echten DN des Benutzers, dann Bind als Benutzer). Ohne Bind-DN wird Direct-Bind mit konstruiertem DN versucht. Prüft `pwdAccountLockedTime` und `shadowExpire`. `ldap_enabled` wird in `routes/auth.py` vor dem LDAP-Aufruf geprüft — ist es deaktiviert, schlägt der Login sofort fehl.
+
+Global-Admin-Synchronisierung: `is_global_admin` wird beim Login nur aus LDAP übernommen, wenn `ldap_admin_group_dn` konfiguriert ist. Ohne konfigurierte Gruppe bleiben manuell gesetzte Admin-Rechte beim nächsten Login erhalten.
+
+`ldap_allow_auto_registration` (Standard: `true`): Ist es deaktiviert, können sich nur vorab durch Admins angelegte Benutzer einloggen — neue LDAP-Konten werden nicht automatisch in der Datenbank angelegt.
+
+Fallback: lokales Passwort-Hash (bcrypt) für Admin-Bootstrap ohne LDAP.
 
 Sessions werden als zufällige Tokens (32 Byte urlsafe) in PostgreSQL gespeichert. `AuthMiddleware` prüft das Cookie bei jedem Request. Session-Lifetime: `SESSION_LIFETIME_HOURS` (Standard: 8h).
 
@@ -230,6 +252,14 @@ Build für Produktion: `npm run build` → erzeugt `src/frontend/dist/`.
 ```bash
 cd src/frontend && npm run build
 # FastAPI serviert dist/ automatisch sobald das Verzeichnis existiert
+```
+
+### Frontend-Build ohne lokales npm (via Docker)
+Wenn `npm` nicht lokal installiert ist — der Volume-Mount im `docker-compose.override.yml` überdeckt das im Image gebaute `dist/`, daher muss nach jeder Frontend-Änderung neu gebaut werden:
+```bash
+# Aus dem Projekt-Root:
+docker run --rm -v "$(pwd)/src/frontend:/app" -w /app node:22-slim npm run build
+# Danach Browser-Tab neu laden — kein Container-Restart nötig
 ```
 
 ### Ersten Admin anlegen
