@@ -9,5 +9,7 @@
 # Caddy bezieht automatisch ein TLS-Zertifikat via Let's Encrypt.
 
 {$DOMAIN:rag.example.com} {
-    reverse_proxy app:8081
+    reverse_proxy app:8081 {
+        header_up X-Real-IP {remote_host}
+    }
 }

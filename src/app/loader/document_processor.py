@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 logger = setup_logger(__name__)
 
+_MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "500"))
+_MAX_TEXT_PER_PAGE = 1_000_000  # 1 MB Text pro Seite als DoS-Schutz
+
 
 class DocumentProcessor:
     """Process and store documents."""
@@ -149,6 +152,11 @@ class DocumentProcessor:
                 total_pages = len(doc)
                 if total_pages == 0:
                     raise ValueError('Document contains no pages')
+                if total_pages > _MAX_PDF_PAGES:
+                    raise ValueError(
+                        f'PDF hat {total_pages} Seiten — Maximum: {_MAX_PDF_PAGES}. '
+                        f'Limit via MAX_PDF_PAGES konfigurierbar.'
+                    )
 
                 for i, page in enumerate(doc):
                     metadata = {
@@ -159,7 +167,11 @@ class DocumentProcessor:
                         'total_pages': total_pages,
                     }
 
-                    chunks = self._chunk_splitter.split_into_chunks(page.get_text(), metadata)
+                    text = page.get_text()
+                    if len(text) > _MAX_TEXT_PER_PAGE:
+                        logger.warning('Seite %d: Text auf 1 MB gekürzt (%d Zeichen)', i + 1, len(text))
+                        text = text[:_MAX_TEXT_PER_PAGE]
+                    chunks = self._chunk_splitter.split_into_chunks(text, metadata)
                     enhanced = self._chunk_splitter.add_neighbouring_content(chunks)
                     non_empty = [c for c in enhanced if c.page_content]
                     chunk_count += len(non_empty)

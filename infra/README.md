@@ -15,8 +15,8 @@ docker compose up -d
 Vektor-Datenbank für Dokument-Embeddings und BM25-Volltextsuche.
 
 - **Image**: `opensearchproject/opensearch:3.6.0`
-- **Port**: 9200 (HTTP), 9600 (Performance Analyzer)
-- **Security Plugin**: deaktiviert (`DISABLE_SECURITY_PLUGIN=true`) — internes Deployment
+- **Port**: 9200 (HTTPS), 9600 (Performance Analyzer)
+- **Security Plugin**: aktiviert — HTTPS mit selbstsigniertem Demo-Zertifikat, Basic Auth via `OPENSEARCH_USERNAME/PASSWORD`
 - **Memory**: 512 MB Heap (`OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m`)
 - **Volume**: `opensearch-data` (persistent)
 
@@ -110,6 +110,23 @@ docker compose exec redis redis-cli KEYS "doc:*"
 # PostgreSQL-Verbindung
 docker compose exec postgres psql -U raguser -d ragdb
 ```
+
+## Warum liegt das Dockerfile im Projektwurzelverzeichnis?
+
+Das `Dockerfile` liegt bewusst im Root (eine Ebene über `infra/`), weil der Docker
+Build-Context den gesamten `src/`-Baum einschließen muss. Der Build-Context in
+`docker-compose.yml` ist auf `..` (Projektwurzel) gesetzt:
+
+```yaml
+app:
+  build:
+    context: ..
+    dockerfile: Dockerfile
+```
+
+Das Dockerfile kann nicht nach `infra/` verschoben werden, ohne den `COPY`-Befehl
+und den Context-Pfad anzupassen — der Quellcode unter `src/` wäre sonst im
+Build-Context nicht erreichbar.
 
 ## Volumes
 

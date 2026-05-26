@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,7 +18,8 @@ logger = setup_logger(__name__)
 
 # Module-level cache keyed by instance_slug — allows instance_service.delete_instance()
 # to invalidate a specific entry without importing the class itself.
-_store_cache: dict[str, "VectorStore"] = {}
+_MAX_CACHED_STORES = 50
+_store_cache: OrderedDict[str, "VectorStore"] = OrderedDict()
 _store_cache_lock = threading.Lock()
 
 
@@ -59,6 +61,8 @@ class VectorStore:
             return _store_cache[instance_slug]
         with _store_cache_lock:
             if instance_slug not in _store_cache:
+                if len(_store_cache) >= _MAX_CACHED_STORES:
+                    _store_cache.popitem(last=False)  # ältesten entfernen (FIFO)
                 _store_cache[instance_slug] = cls(config, instance_slug)
             return _store_cache[instance_slug]
 
@@ -71,6 +75,20 @@ class VectorStore:
         except Exception as e:
             raise ValueError(f'Error initializing Ollama embeddings: {e}') from e
 
+    def _get_ssl_kwargs(self) -> dict:
+        """Common SSL/auth kwargs for OpenSearch clients (handles self-signed demo cert)."""
+        use_ssl = self.config.opensearch_url.startswith("https://")
+        kwargs: dict = {}
+        if use_ssl:
+            kwargs.update(
+                use_ssl=True,
+                verify_certs=False,
+                ssl_show_warn=False,
+            )
+        if self.config.opensearch_username and self.config.opensearch_password:
+            kwargs["http_auth"] = (self.config.opensearch_username, self.config.opensearch_password)
+        return kwargs
+
     def _get_raw_client(self) -> OpenSearch:
         """Return a cached raw OpenSearch client for direct API access."""
         if self._raw_client is None:
@@ -78,6 +96,7 @@ class VectorStore:
                 hosts=[self.config.opensearch_url],
                 connection_class=RequestsHttpConnection,
                 timeout=300,
+                **self._get_ssl_kwargs(),
             )
         return self._raw_client
 
@@ -258,5 +277,6 @@ class VectorStore:
                 method='hnsw',
                 space_type='l2',
                 index_mapping=self._index_mapping,
+                **self._get_ssl_kwargs(),
             )
         return self._store

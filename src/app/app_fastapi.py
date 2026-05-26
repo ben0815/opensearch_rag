@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,27 +36,61 @@ logger = setup_logger(__name__)
 
 _SESSION_CLEANUP_INTERVAL = int(os.getenv("SESSION_CLEANUP_INTERVAL_SECONDS", "3600"))
 _AUDIT_CLEANUP_INTERVAL = 86400  # daily
+_CONFIG_SYNC_INTERVAL = int(os.getenv("CONFIG_SYNC_INTERVAL_SECONDS", "30"))
 
 _SECURE_COOKIES = os.getenv("SECURE_COOKIES", "false").lower() == "true"
+_DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 _APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "")
-if not _APP_SECRET_KEY:
-    raise RuntimeError(
-        "APP_SECRET_KEY ist nicht gesetzt. "
-        "Bitte in infra/.env einen langen zufälligen Wert setzen — "
-        "Beispiel: python -c \"import secrets; print(secrets.token_hex(32))\""
-    )
+
+_FORBIDDEN_SECRETS = {
+    "change_me_generate_a_random_key", "changeme", "change_me",
+    "secret", "password", "test", "dev", "admin",
+}
+
+
+def _validate_secrets() -> None:
+    secret = os.getenv("APP_SECRET_KEY", "")
+    if not secret or secret in _FORBIDDEN_SECRETS or len(secret) < 32:
+        print(
+            "FEHLER: APP_SECRET_KEY ist nicht gesetzt, zu kurz (< 32 Zeichen) "
+            "oder ein bekannter Platzhalter.\n"
+            "Generieren: python -c \"import secrets; print(secrets.token_hex(32))\"",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not _DEV_MODE and os.getenv("SECURE_COOKIES", "false").lower() != "true":
+        print(
+            "WARNUNG: SECURE_COOKIES=false in Produktion (DEV_MODE=false) — "
+            "Session-Tokens werden unverschlüsselt übertragen!",
+            file=sys.stderr,
+        )
+
+    ldap_enabled = os.getenv("LDAP_ENABLED", "false").lower() not in ("false", "0", "off", "")
+    ldap_url = os.getenv("LDAP_URL", "")
+    if ldap_enabled and ldap_url and not os.getenv("ENCRYPTION_KEY", ""):
+        print(
+            "WARNUNG: LDAP_ENABLED=true aber ENCRYPTION_KEY ist nicht gesetzt — "
+            "das LDAP-Bind-Passwort wird unverschlüsselt in der Datenbank gespeichert!",
+            file=sys.stderr,
+        )
+
+
+_validate_secrets()
 
 _SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
+        "img-src 'self' data: blob:; "
         "font-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
-        "form-action 'self'"
+        "form-action 'self'; "
+        "object-src 'none'; "
+        "upgrade-insecure-requests;"
     ),
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -109,6 +144,9 @@ async def _audit_cleanup_loop() -> None:
             logger.error(f"Audit cleanup failed: {e}")
 
 
+_LLM_KEYS = {"llm_model", "llm_temperature", "llm_num_ctx", "llm_timeout_seconds"}
+_SEARCH_KEYS = {"hybrid_bm25_weight", "hybrid_knn_weight", "hybrid_k", "hybrid_score_threshold"}
+
 _TUNABLE_SETTINGS = {
     "llm_model", "llm_temperature", "llm_num_ctx", "llm_timeout_seconds",
     "hybrid_bm25_weight", "hybrid_knn_weight", "hybrid_k", "hybrid_score_threshold",
@@ -121,6 +159,72 @@ _SETTING_TYPES: dict[str, type] = {
     "hybrid_k": int, "hybrid_score_threshold": float,
     "llm_model": str, "llm_system_prompt": str,
 }
+
+
+async def _config_sync_loop(app) -> None:
+    """Periodisch Redis-Versionszähler prüfen und bei Änderung Config aus DB neu laden.
+
+    Läuft in jedem uvicorn-Worker. Wenn Worker A admin-Einstellungen ändert und
+    config:version inkrementiert, erkennen Worker B/C/D beim nächsten Tick die
+    Abweichung und synchronisieren ihren Zustand ohne Neustart.
+    """
+    from app.services.config_service import get_config_version
+    from app.db.models import AppSetting
+
+    try:
+        local_version = await get_config_version(app.state.redis)
+    except Exception as e:
+        logger.error("Config-Sync: Startwert nicht lesbar: %s", e)
+        local_version = 0
+
+    while True:
+        await asyncio.sleep(_CONFIG_SYNC_INTERVAL)
+        try:
+            remote = await get_config_version(app.state.redis)
+            if remote == local_version:
+                continue
+
+            async with get_session_factory()() as db:
+                rows = (await db.execute(select(AppSetting))).scalars().all()
+
+            # Env-Var-Defaults als Basis: gelöschte DB-Einträge (z.B. geleerte
+            # llm_system_prompt) werden so korrekt auf den Default zurückgesetzt.
+            new_config = LoaderConfig()
+            for row in rows:
+                if row.key not in _TUNABLE_SETTINGS or not hasattr(new_config, row.key):
+                    continue
+                cast = _SETTING_TYPES.get(row.key, str)
+                try:
+                    setattr(new_config, row.key, cast(row.value))
+                except (ValueError, TypeError):
+                    pass
+
+            current = app.state.config
+            llm_changed = any(
+                getattr(new_config, k) != getattr(current, k) for k in _LLM_KEYS
+            )
+            search_changed = any(
+                getattr(new_config, k) != getattr(current, k) for k in _SEARCH_KEYS
+            )
+            app.state.config = new_config
+
+            if llm_changed:
+                from app.rag import clear_llm_cache
+                clear_llm_cache()
+            if search_changed:
+                from app.loader.vector_store import clear_vector_store_cache
+                clear_vector_store_cache()
+
+            local_version = remote
+            logger.info(
+                "Config-Sync: Version %d übernommen (llm_changed=%s, search_changed=%s)",
+                remote, llm_changed, search_changed,
+            )
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Config-Sync fehlgeschlagen: %s", e)
 
 
 async def _load_db_settings(config: LoaderConfig, db_factory) -> None:
@@ -195,13 +299,21 @@ async def lifespan(app: FastAPI):
 
     session_task = asyncio.create_task(_session_cleanup_loop())
     audit_task = asyncio.create_task(_audit_cleanup_loop())
+    config_sync_task = asyncio.create_task(_config_sync_loop(app))
     yield
     session_task.cancel()
     audit_task.cancel()
+    config_sync_task.cancel()
     await app.state.redis.aclose()
 
 
-app = FastAPI(title="RAG Multi-Tenant", lifespan=lifespan)
+app = FastAPI(
+    title="RAG Multi-Tenant",
+    lifespan=lifespan,
+    docs_url="/docs" if _DEV_MODE else None,
+    redoc_url="/redoc" if _DEV_MODE else None,
+    openapi_url="/openapi.json" if _DEV_MODE else None,
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -250,8 +362,10 @@ app.include_router(admin_router.router)
 
 @app.get("/health")
 async def health():
-    from app import __version__
-    return JSONResponse({"status": "ok", "version": __version__})
+    if _DEV_MODE:
+        from app import __version__
+        return JSONResponse({"status": "ok", "version": __version__})
+    return JSONResponse({"status": "ok"})
 
 
 # Serve React SPA — must come AFTER API routes so catch-all doesn't shadow them.

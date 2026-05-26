@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import tempfile
 from typing import Annotated
@@ -8,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AuditLog, Instance
+
+logger = logging.getLogger(__name__)
 from app.db.session import get_db
 from app.dependencies import get_config, get_redis, limiter, _get_user_or_ip
 from app.loader.config import LoaderConfig
@@ -19,6 +22,33 @@ from app.services.user_service import get_effective_role
 router = APIRouter(prefix="/api/documents")
 
 _DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+_ALLOWED_MIME_TYPES = {"application/pdf"}
+
+
+def _sanitize_filename(name: str) -> str:
+    """Entfernt pfad-traversal-gefährliche Elemente und HTML-Injection-Zeichen.
+    Umlaute und sonstige Unicode-Zeichen bleiben erhalten (kein re.sub mit \\w).
+    """
+    name = name.replace("\\", "/").split("/")[-1]  # Pfad-Traversal entfernen
+    name = name.replace("\x00", "")                # Null-Bytes
+    name = name.replace("<", "").replace(">", "").replace("&", "")
+    name = name.replace('"', "").replace("'", "")
+    return name[:255] or "unnamed"
+
+
+async def _validate_mime(upload: UploadFile) -> None:
+    """Prüft Magic Bytes der Datei. Wirft ValueError bei unerlaubtem Typ."""
+    try:
+        import magic as _magic
+        header = await upload.read(512)
+        await upload.seek(0)
+        detected = _magic.from_buffer(header, mime=True)
+        if detected not in _ALLOWED_MIME_TYPES:
+            raise ValueError(f"Ungültiger Dateityp: {detected}")
+    except ImportError:
+        # python-magic nicht installiert — nur Extension-Check greift
+        pass
 
 
 @router.get("/{instance_id}")
@@ -82,12 +112,21 @@ async def upload_documents(
     async def _stream():
         total = len(files)
         for i, upload in enumerate(files, 1):
-            fname = upload.filename or ""
+            raw_fname = upload.filename or ""
+            fname = _sanitize_filename(raw_fname)
             ext = os.path.splitext(fname)[1].lower()
 
             if ext not in supported_exts:
                 ext_display = ext or "?"
                 err_payload = json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'error', 'error': f'Dateiformat nicht unterstützt: {ext_display}'})
+                yield f"data: {err_payload}\n\n"
+                continue
+
+            # MIME-Typ prüfen (Magic Bytes)
+            try:
+                await _validate_mime(upload)
+            except ValueError as mime_err:
+                err_payload = json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'error', 'error': str(mime_err)})
                 yield f"data: {err_payload}\n\n"
                 continue
 
@@ -141,7 +180,8 @@ async def upload_documents(
                     pass
 
             except Exception as exc:
-                yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'error', 'error': str(exc)})}\n\n"
+                logger.error("Upload-Fehler für Datei %s: %s", fname, exc, exc_info=True)
+                yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'error', 'error': 'Verarbeitung fehlgeschlagen'})}\n\n"
             finally:
                 if tmp_path and os.path.exists(tmp_path):
                     os.unlink(tmp_path)

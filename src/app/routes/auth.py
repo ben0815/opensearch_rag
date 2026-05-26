@@ -2,6 +2,7 @@ import asyncio
 import os
 from datetime import datetime, timezone
 
+import bcrypt as _bcrypt_mod
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -20,7 +21,31 @@ logger = setup_logger(__name__)
 
 _SECURE_COOKIES = os.getenv("SECURE_COOKIES", "false").lower() == "true"
 
+# Generiert einmal beim Start — verhindert Timing-Oracle für nicht-existierende User
+_DUMMY_HASH = _bcrypt_mod.hashpw(b"dummy_constant_timing_placeholder", _bcrypt_mod.gensalt(rounds=12)).decode()
+
+_MAX_LOGIN_FAILURES = 5
+_LOCKOUT_SECONDS = 900  # 15 Minuten
+
 router = APIRouter(prefix="/api/auth")
+
+
+async def _is_locked(redis, username: str) -> bool:
+    """Gibt True zurück wenn Account gesperrt ist (ohne Zähler zu verändern)."""
+    val = await redis.get(f"login_failures:{username}")
+    return int(val or 0) >= _MAX_LOGIN_FAILURES
+
+
+async def _record_failure(redis, username: str) -> None:
+    """Fehlversuch erfassen. Setzt TTL beim ersten Eintrag."""
+    key = f"login_failures:{username}"
+    count = await redis.incr(key)
+    if count == 1:
+        await redis.expire(key, _LOCKOUT_SECONDS)
+
+
+async def _clear_login_failures(redis, username: str) -> None:
+    await redis.delete(f"login_failures:{username}")
 
 
 @router.post("/login")
@@ -30,8 +55,6 @@ async def login(
     body: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    import bcrypt as _bcrypt
-
     from ldap3.core.exceptions import LDAPBindError
 
     username = body.username.strip()
@@ -40,6 +63,13 @@ async def login(
     error = None
     user = None
 
+    redis = request.app.state.redis
+
+    # Per-User-Lockout: prüfen ohne Zähler zu erhöhen — korrektes PW darf nie gesperrt werden
+    if await _is_locked(redis, username):
+        # Fehlertext bewusst identisch — kein Information-Leak ob gesperrt oder falsches PW
+        return JSONResponse({"detail": "Ungültige Anmeldedaten."}, status_code=401)
+
     result = await db.execute(select(User).where(User.ldap_uid == username))
     db_user = result.scalar_one_or_none()
 
@@ -47,13 +77,16 @@ async def login(
     if db_user and db_user.local_password_hash:
         if not db_user.is_active:
             error = "Ihr Account wurde deaktiviert."
-        elif _bcrypt.checkpw(password.encode(), db_user.local_password_hash.encode()):
+        elif _bcrypt_mod.checkpw(password.encode(), db_user.local_password_hash.encode()):
             db_user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
             await db.commit()
             user = db_user
         else:
             error = "Ungültige Anmeldedaten."
     else:
+        # Timing angleichen: auch für nicht-existierende User bcrypt laufen lassen
+        if db_user is None:
+            _bcrypt_mod.checkpw(password.encode(), _DUMMY_HASH.encode())
         # 2. LDAP authentication
         ldap_cfg = await get_ldap_config(db)
         ldap_enabled = ldap_cfg.get("ldap_enabled", "true").lower() not in ("false", "0", "off")
@@ -102,6 +135,8 @@ async def login(
                 user = db_user
 
     if error or not user:
+        # Fehlversuch zählen — erst nach gescheiterter Auth, nie bei korrekten Credentials
+        await _record_failure(redis, username)
         try:
             from app.db.models import AuditLog
             db.add(AuditLog(
@@ -114,6 +149,9 @@ async def login(
         except Exception:
             pass
         return JSONResponse({"detail": error or "Ungültige Anmeldedaten."}, status_code=401)
+
+    # Erfolgreicher Login — Fehlerzähler zurücksetzen
+    await _clear_login_failures(redis, username)
 
     # Audit log
     try:
@@ -179,7 +217,7 @@ async def me(request: Request):
 
 
 def _get_ip(request: Request) -> str:
-    xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        return xff.split(",")[-1].strip()
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
     return getattr(request.client, "host", "unknown") or "unknown"

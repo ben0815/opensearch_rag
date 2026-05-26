@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import iterate_in_threadpool
 
 from app.db.models import AuditLog, ChatHistory, Instance
+from app.dependencies import get_redis
 from app.db.session import get_db
 from app.dependencies import get_config, limiter, _get_user_or_ip
 from app.loader.config import LoaderConfig
@@ -96,6 +97,19 @@ async def chat_stream(
                     except Exception as e:
                         logger.error("History-Speicherung fehlgeschlagen: %s", e)
                         history_id = None
+
+                    # Audit-Log: Zugriff erfassen (nicht blockierend)
+                    try:
+                        db.add(AuditLog(
+                            user_id=user_id,
+                            action="chat_query",
+                            target_type="instance",
+                            target_id=str(instance_id),
+                            detail={"sources_count": len(chunk.get("sources", []))},
+                        ))
+                        await db.commit()
+                    except Exception:
+                        logger.warning("Chat-Audit-Log fehlgeschlagen", exc_info=True)
 
                     done_payload = {
                         "history_id": history_id,
@@ -237,6 +251,10 @@ async def clear_history(
     db: AsyncSession = Depends(get_db),
 ):
     user = request.state.user
+    if instance_id and not user.is_global_admin:
+        role = await get_effective_role(db, user, instance_id)
+        if role is None:
+            raise HTTPException(status_code=403, detail="Kein Zugriff auf diese Instanz")
     stmt = delete(ChatHistory).where(ChatHistory.user_id == user.id)
     if instance_id:
         stmt = stmt.where(ChatHistory.instance_id == instance_id)

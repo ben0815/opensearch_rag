@@ -51,6 +51,12 @@ def authenticate(username: str, password: str, ldap_config: dict | None = None) 
 
     status_attrs = [uid_attr, dn_attr, mail_attr, "shadowExpire", "pwdAccountLockedTime", "shadowInactive"]
 
+    if ldap_url.lower().startswith("ldap://"):
+        logger.warning(
+            "LDAP-Verbindung verwendet unverschlüsseltes ldap:// — "
+            "für Produktion ldaps:// oder STARTTLS verwenden."
+        )
+
     server = Server(ldap_url, get_info=ALL)
 
     if bind_dn:

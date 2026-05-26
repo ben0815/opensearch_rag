@@ -16,6 +16,7 @@ from app.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
+_MAX_LLM_CACHE = 10
 _llm_cache: dict[str, OllamaLLM] = {}
 _llm_cache_lock = threading.Lock()
 
@@ -100,6 +101,9 @@ def get_llm(config: LoaderConfig) -> OllamaLLM:
     with _llm_cache_lock:
         if cache_key in _llm_cache:
             return _llm_cache[cache_key]
+        if len(_llm_cache) >= _MAX_LLM_CACHE:
+            oldest_key = next(iter(_llm_cache))
+            del _llm_cache[oldest_key]
         llm = OllamaLLM(
             base_url=config.ollama_host,
             model=config.llm_model,

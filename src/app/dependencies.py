@@ -1,3 +1,5 @@
+import os
+
 from fastapi import Request
 from slowapi import Limiter
 from app.loader.config import LoaderConfig
@@ -5,14 +7,13 @@ from app.loader.config import LoaderConfig
 
 def _get_client_ip(request: Request) -> str:
     """Echte Client-IP hinter Caddy.
-    Caddy hängt an das XFF-Feld — der erste Eintrag ist vom Client fälschbar.
-    Der letzte Eintrag ist der von Caddy gesetzte (nicht spoofbar).
-    Fallback auf TCP-Remote-Address für direkte Verbindungen (Dev).
+    X-Real-IP wird von Caddy auf die TCP-Verbindungsadresse gesetzt (nicht spoofbar).
+    Fallback auf TCP-Remote-Address für direkte Verbindungen (Dev ohne Caddy).
     """
-    xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host or "unknown"
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+    return getattr(request.client, "host", None) or "unknown"
 
 
 def _get_user_or_ip(request: Request) -> str:
@@ -25,9 +26,17 @@ def _get_user_or_ip(request: Request) -> str:
     return _get_client_ip(request)
 
 
-# Singleton — wird in app_fastapi.py an app.state gebunden und in Routen als
-# Dekorator genutzt. In-Memory-Speicher: reicht für Single-Process-Deployment.
-limiter = Limiter(key_func=_get_client_ip)
+def _build_redis_uri() -> str:
+    host = os.getenv("REDIS_HOST", "redis")
+    port = os.getenv("REDIS_PORT", "6379")
+    password = os.getenv("REDIS_PASSWORD", "")
+    if password:
+        return f"redis://:{password}@{host}:{port}"
+    return f"redis://{host}:{port}"
+
+
+# Redis-backed Rate-Limiter — gilt prozessübergreifend bei mehreren uvicorn-Workers.
+limiter = Limiter(key_func=_get_client_ip, storage_uri=_build_redis_uri())
 
 
 def get_config(request: Request) -> LoaderConfig:

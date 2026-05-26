@@ -49,9 +49,16 @@ curl -X DELETE http://localhost:9200/documents_<slug>
 
 ```
 opensearch_rag/
-├── Dockerfile                        # Multi-stage build: node→frontend, python→app
+├── Dockerfile                        # Multi-stage build: node→frontend, python→app (muss im Root liegen, s. infra/README.md)
 ├── requirements.txt                  # Pinned third-party deps
-├── setup.py                          # Package-Installation (src/ als package root)
+├── pyproject.toml                    # PEP 517/621 build config + Ruff + pytest settings
+├── tests/                            # Pytest-Test-Suite
+│   ├── conftest.py                   # Fixtures: SQLite-TestDB, fakeredis, AsyncClient
+│   ├── security/
+│   │   ├── test_instance_isolation.py  # IDOR-Tests: User A darf Instanz B nicht sehen
+│   │   └── test_admin_access.py        # Admin-Endpunkte für Nicht-Admins blockiert
+│   └── unit/
+│       └── test_crypto.py            # Fernet encrypt/decrypt
 ├── src/frontend/                     # React 19 SPA (Vite + TypeScript)
 │   ├── package.json                  # npm deps: react, react-bootstrap, zustand, i18next, recharts …
 │   ├── vite.config.ts                # Proxy /api → localhost:8081 im Dev-Modus
@@ -109,7 +116,16 @@ opensearch_rag/
     │   ├── user.py                   # /api/instances, /api/users/me
     │   ├── chat.py                   # /api/chat/stream (SSE), /api/chat/history
     │   ├── documents.py              # /api/documents/{id}, /upload (SSE), /{hash} (DELETE)
-    │   └── admin.py                  # /api/admin/: users, instances, groups, settings, ldap, maintenance, status, audit
+    │   └── admin/                    # /api/admin/* — aufgeteilt in Sub-Router
+    │       ├── __init__.py           # Aggregator + /impersonation/stop + /maintenance
+    │       ├── _shared.py            # _require_admin, _audit, _now, _like, Konstanten
+    │       ├── users.py              # /users/*
+    │       ├── instances.py          # /instances/*
+    │       ├── groups.py             # /groups/*
+    │       ├── settings.py           # /settings
+    │       ├── ldap.py               # /ldap/*
+    │       ├── status.py             # /status
+    │       └── audit.py              # /audit
     ├── services/
     │   ├── chat_service.py           # stream_answer() (SSE-Generator), save_to_history()
     │   ├── config_service.py         # get_effective_config(), get_ldap_config(), is_maintenance_mode(), set_app_setting()
@@ -149,7 +165,7 @@ PDF → fitz (PyMuPDF) → Seiten-Text
 
 `_build_prompt_template(custom_prompt: str) -> PromptTemplate` — baut bei jedem Chat-Aufruf ein `PromptTemplate` aus `config.llm_system_prompt`. Fällt auf `_PROMPT_TEMPLATE` (Default) zurück wenn: leer, Pflicht-Platzhalter fehlen (`{context}`, `{question}`, `{history}`), oder LangChain-Parsing schlägt fehl. Loggt in jedem Fallback-Fall eine Warning.
 
-`validate_system_prompt(prompt: str) -> list[str]` — gibt fehlende Platzhalter zurück (leere Liste = gültig). Wird in `routes/admin.py → update_settings` serverseitig vor dem Speichern aufgerufen.
+`validate_system_prompt(prompt: str) -> list[str]` — gibt fehlende Platzhalter zurück (leere Liste = gültig). Wird in `routes/admin/settings.py → update_settings` serverseitig vor dem Speichern aufgerufen.
 
 `generate_stream()` verwendet `_build_prompt_template(getattr(config, "llm_system_prompt", ""))` — `getattr` mit Default schützt gegen fehlendes Feld auf gecachten Instanzen.
 

@@ -10,8 +10,7 @@ services:
       - discovery.type=single-node
       - bootstrap.memory_lock=true
       - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-      - "DISABLE_SECURITY_PLUGIN=true"
-      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD}
     ulimits:
       memlock:
         soft: -1
@@ -27,7 +26,7 @@ services:
     networks:
       - opensearch-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:9200"]
+      test: ["CMD-SHELL", "curl -sk https://localhost:9200 -o /dev/null"]
       interval: 20s
       timeout: 10s
       retries: 5
@@ -88,7 +87,7 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-bge-m3}
       - LLM_MODEL=${LLM_MODEL:-qwen3.5:35b}
-      - OPENSEARCH_URL=${OPENSEARCH_URL:-http://opensearch:9200}
+      - OPENSEARCH_URL=${OPENSEARCH_URL:-https://opensearch:9200}
       - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME:-admin}
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-admin}
       - OPENSEARCH_INDEX_NAME=${OPENSEARCH_INDEX_NAME:-documents}

@@ -200,3 +200,19 @@ async def is_maintenance_mode(db: AsyncSession) -> bool:
 
 def invalidate_maintenance_cache() -> None:
     _MAINTENANCE_CACHE["ts"] = 0.0
+
+
+# ─── Multi-Worker Config Version ──────────────────────────────────────────────
+
+_CONFIG_VERSION_KEY = "config:version"
+
+
+async def get_config_version(redis) -> int:
+    """Return the current config version counter from Redis (0 if unset)."""
+    val = await redis.get(_CONFIG_VERSION_KEY)
+    return int(val) if val else 0
+
+
+async def bump_config_version(redis) -> int:
+    """Atomically increment the config version. Call after admin settings change."""
+    return await redis.incr(_CONFIG_VERSION_KEY)

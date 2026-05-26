@@ -44,7 +44,7 @@ RUN python -m pip install --upgrade pip && \
     pip install -r requirements.txt
 
 # Copy the rest of the application
-COPY setup.py .
+COPY pyproject.toml .
 COPY src/ src/
 COPY alembic.ini .
 COPY alembic/ alembic/
@@ -69,7 +69,7 @@ WORKDIR /app
 # Copy installed packages, application files, and pre-downloaded tokenizer cache
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /build/src /app/src
-COPY --from=builder /build/setup.py /app/setup.py
+COPY --from=builder /build/pyproject.toml /app/pyproject.toml
 COPY --from=builder /build/alembic.ini /app/alembic.ini
 COPY --from=builder /build/alembic /app/alembic
 COPY --from=builder /build/.cache/huggingface /app/.cache/huggingface
@@ -88,6 +88,7 @@ RUN set -eux; \
     for i in $(seq 1 3); do \
         apt-get install -y --no-install-recommends \
             curl \
+            libmagic1 \
         && break \
         || { echo "Retry attempt $i"; sleep 5; }; \
     done; \

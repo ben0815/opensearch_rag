@@ -92,6 +92,10 @@ class AppSetting(Base):
 
 class ChatHistory(Base):
     __tablename__ = "chat_history"
+    __table_args__ = (
+        Index("idx_chat_history_user_instance", "user_id", "instance_id"),
+        Index("idx_chat_history_created_at", "created_at"),
+    )
     id                = Column(Integer, primary_key=True)
     user_id           = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     instance_id       = Column(Integer, ForeignKey("instances.id", ondelete="CASCADE"), nullable=False)
@@ -105,8 +109,8 @@ class ChatHistory(Base):
 class Session(Base):
     __tablename__ = "sessions"
     token              = Column(String(128), primary_key=True)
-    user_id            = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    expires_at         = Column(DateTime, nullable=False)
+    user_id            = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    expires_at         = Column(DateTime, nullable=False, index=True)
     created_at         = Column(DateTime, nullable=False, default=_utcnow)
     is_impersonation   = Column(Boolean, nullable=False, default=False)
     impersonated_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
@@ -116,10 +120,10 @@ class Session(Base):
 class AuditLog(Base):
     __tablename__ = "audit_log"
     id          = Column(Integer, primary_key=True)
-    user_id     = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
-    action      = Column(String(64), nullable=False)
+    user_id     = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    action      = Column(String(64), nullable=False, index=True)
     target_type = Column(String(64))
     target_id   = Column(String(255))
     detail      = Column(JSON)
     ip_address  = Column(String(64))
-    created_at  = Column(DateTime, nullable=False, default=_utcnow)
+    created_at  = Column(DateTime, nullable=False, default=_utcnow, index=True)
