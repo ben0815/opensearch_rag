@@ -308,18 +308,21 @@ Ist kein LDAP-Server konfiguriert oder erreichbar, kann ein lokaler Bootstrap-Ad
 In der Entwicklung ist die App direkt unter Port 8081 erreichbar. Für den Produktionseinsatz mit HTTPS steht ein Caddy-Reverse-Proxy vorbereitet, der über ein Docker-Compose-Profile aktiviert wird.
 
 ```bash
-# infra/.env anpassen:
+# 1. Caddyfile aus der Vorlage erstellen (nicht in Git — einmalig pro Server):
+cp infra/caddy/Caddyfile.example infra/caddy/Caddyfile
+# Domain im Caddyfile anpassen oder DOMAIN=rag.example.com in infra/.env setzen
+
+# 2. infra/.env anpassen:
 #   APP_BIND_HOST=127.0.0.1   # App nicht mehr direkt von außen erreichbar
 #   SECURE_COOKIES=true        # Session-Cookies auf HTTPS-only setzen
-#   DOMAIN=rag.example.com     # Wird im Caddyfile als {$DOMAIN} referenziert
 
-# Stack mit Caddy starten:
+# 3. Stack mit Caddy starten:
 docker compose --profile caddy up -d
 ```
 
 Caddy bezieht automatisch ein TLS-Zertifikat via Let's Encrypt (Port 80 für ACME-Challenge, 443 für HTTPS). Die App ist intern über das Docker-Netzwerk erreichbar (`app:8081`) und wird nicht mehr direkt exponiert.
 
-Das Caddyfile liegt unter `infra/caddy/Caddyfile` und kann für erweiterte Konfigurationen (eigene Zertifikate, Header, Rate-Limiting) angepasst werden.
+`infra/caddy/Caddyfile` ist in `.gitignore` — die Vorlage `infra/caddy/Caddyfile.example` liegt im Repository und kann für erweiterte Konfigurationen (eigene Zertifikate, Header, Rate-Limiting) angepasst werden.
 
 ## Datenbankmigrationen (Alembic)
 

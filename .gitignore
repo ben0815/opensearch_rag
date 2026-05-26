@@ -15,6 +15,7 @@ env/
 # Environment / secrets
 .env
 infra/.env
+infra/caddy/Caddyfile
 
 # Certificates and keys
 *.pem

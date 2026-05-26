@@ -46,11 +46,17 @@ Reverse-Proxy mit automatischem TLS — nur für den Produktionseinsatz.
 
 - **Image**: `caddy:2-alpine`
 - **Ports**: 80 (HTTP / ACME-Challenge), 443 (HTTPS)
-- **Config**: `caddy/Caddyfile` (Domain via `{$DOMAIN}` konfigurierbar)
+- **Config**: `caddy/Caddyfile` (nicht in Git — aus `caddy/Caddyfile.example` kopieren)
 - **Volumes**: `caddy_data` (Zertifikate), `caddy_config` (Caddy-interne Konfiguration)
 - **Aktivierung**: `docker compose --profile caddy up -d`
 
-Vor dem ersten Start mit Caddy in `infra/.env` setzen:
+Vor dem ersten Start:
+```bash
+cp infra/caddy/Caddyfile.example infra/caddy/Caddyfile
+# Domain im Caddyfile anpassen (oder DOMAIN= in .env setzen)
+```
+
+Außerdem in `infra/.env` setzen:
 ```bash
 APP_BIND_HOST=127.0.0.1   # App-Port nicht mehr direkt von außen erreichbar
 SECURE_COOKIES=true        # Session- und CSRF-Cookies auf HTTPS-only
