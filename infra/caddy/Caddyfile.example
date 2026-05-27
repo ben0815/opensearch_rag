@@ -11,5 +11,8 @@
 {$DOMAIN:ki.mbgft.de} {
     reverse_proxy app:8081 {
         header_up X-Real-IP {remote_host}
+        # SSE-Streams sofort flushen — ohne das puffert Caddy event: error
+        # und der Browser sieht einen Verbindungsabbruch statt der Fehlermeldung.
+        flush_interval -1
     }
 }

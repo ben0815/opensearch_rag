@@ -9,7 +9,7 @@ services:
       - node.name=opensearch-node
       - discovery.type=single-node
       - bootstrap.memory_lock=true
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g"
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD}
     ulimits:
       memlock:
@@ -124,7 +124,7 @@ services:
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
       - LLM_NUM_CTX=${LLM_NUM_CTX:-16384}
       # Timeout für LLM-Antwort in Sekunden — bei großen Modellen ggf. erhöhen.
-      # Das Frontend (chat.js) wartet LLM_TIMEOUT_SECONDS + 30s — beide müssen konsistent sein.
+      # Das Frontend hat keinen eigenen Timeout — dieser Wert ist die einzige Grenze.
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-240}
       - SECURE_COOKIES=${SECURE_COOKIES:-false}
       # CSRF — APP_SECRET_KEY ist Pflicht; Generieren: python -c "import secrets; print(secrets.token_hex(32))"

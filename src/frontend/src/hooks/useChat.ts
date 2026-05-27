@@ -17,8 +17,6 @@ interface UseChatOptions {
   onDone?: (historyId: number, durationS: number) => void;
 }
 
-const LLM_TIMEOUT_MS = 120_000;
-
 export function useChat({ instanceId, onDone }: UseChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -45,9 +43,6 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
 
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-
-      // LLM timeout
-      const timer = setTimeout(() => ctrl.abort("timeout"), LLM_TIMEOUT_MS);
 
       let ttftReported = false;
       let firstTokenTime = 0;
@@ -145,7 +140,31 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
               } else if (eventType === "error") {
                 try {
                   const errData = JSON.parse(raw) as { message: string };
-                  setError(errData.message ?? "Server error");
+                  const errorMessage = errData.message ?? "Server error";
+                  setError(errorMessage);
+                  // Clear the pending assistant bubble so the ThinkingIndicator stops
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsg.id
+                        ? { ...m, content: "", pending: false, sources: [] }
+                        : m,
+                    ),
+                  );
+                  // Save to failed history — this is the main path for backend LLM timeouts
+                  if (instanceId) {
+                    fetch("/api/chat/history/failed", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrf() },
+                      credentials: "include",
+                      body: JSON.stringify({
+                        question,
+                        instance_id: instanceId,
+                        error_type: "server_error",
+                        error_message: errorMessage,
+                        duration_s: (Date.now() - startRef.current) / 1000,
+                      }),
+                    }).catch(() => {});
+                  }
                 } catch {
                   /* ignore */
                 }
@@ -179,7 +198,7 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
         }
       } catch (err) {
         const reason = (err as { message?: string })?.message ?? String(err);
-        const aborted = reason === "timeout" || reason.includes("abort");
+        const isUserAbort = err instanceof DOMException && err.name === "AbortError";
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
@@ -187,11 +206,35 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
               : m,
           ),
         );
-        setError(aborted ? "aborted" : reason);
+        setError(isUserAbort ? "aborted" : reason);
+
+        // Report network/HTTP errors to history; skip intentional user aborts
+        if (!isUserAbort && instanceId) {
+          fetch("/api/chat/history/failed", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrf() },
+            credentials: "include",
+            body: JSON.stringify({
+              question,
+              instance_id: instanceId,
+              error_type: "server_error",
+              error_message: reason,
+              duration_s: (Date.now() - startRef.current) / 1000,
+            }),
+          }).catch(() => {});
+        }
       } finally {
-        clearTimeout(timer);
         abortRef.current = null;
         setStreaming(false);
+        // Sicherheitsnetz: falls der Stream ohne event: done oder event: error
+        // geschlossen wurde (stilles EOF, Verbindungsabbruch), pending bereinigen.
+        // Wurde pending bereits durch einen der Handler auf false gesetzt, ist
+        // die Bedingung false und das Update ist ein No-op.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsg.id && m.pending ? { ...m, pending: false } : m,
+          ),
+        );
       }
     },
     [instanceId, streaming, onDone],
