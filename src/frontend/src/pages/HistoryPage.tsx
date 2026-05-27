@@ -16,6 +16,7 @@ interface ContextDoc {
   page?: number | null;
   score: number;
   excerpt: string;
+  search_source?: "bm25" | "knn" | "both" | null;
 }
 
 function formatDuration(s: number): string {
@@ -35,6 +36,13 @@ function DurationChip({ meta }: { meta: Record<string, unknown> | null }) {
     </small>
   );
 }
+
+const SOURCE_BADGES: Record<string, { label: string; bg: string; text?: string }> = {
+  bm25: { label: "BM25", bg: "primary" },
+  knn:  { label: "kNN",  bg: "info", text: "dark" },
+  both: { label: "BM25", bg: "primary" },
+};
+const KNN_BOTH_BADGE = { label: "kNN", bg: "info", text: "dark" };
 
 function SourcesSection({ docs }: { docs: ContextDoc[] }) {
   const { t } = useTranslation();
@@ -60,7 +68,7 @@ function SourcesSection({ docs }: { docs: ContextDoc[] }) {
         <div className="mt-2 d-flex flex-column gap-2">
           {docs.map((doc, i) => (
             <div key={i} className="p-2 rounded border small">
-              <div className="d-flex justify-content-between align-items-center mb-1">
+              <div className="d-flex justify-content-between align-items-start mb-1">
                 <span className="fw-semibold text-truncate me-2">
                   <i className="bi bi-file-earmark-text me-1" />
                   {doc.filename}
@@ -70,9 +78,27 @@ function SourcesSection({ docs }: { docs: ContextDoc[] }) {
                     </Badge>
                   )}
                 </span>
-                <Badge bg="primary-subtle" text="primary" className="text-nowrap flex-shrink-0">
-                  {t("chat.score", { score: doc.score.toFixed(3) })}
-                </Badge>
+                <span className="d-flex align-items-center gap-1 flex-shrink-0">
+                  {doc.search_source && SOURCE_BADGES[doc.search_source] && (
+                    <>
+                      <Badge
+                        bg={SOURCE_BADGES[doc.search_source].bg}
+                        text={SOURCE_BADGES[doc.search_source].text as "dark" | undefined}
+                        style={{ fontSize: "0.6rem" }}
+                      >
+                        {SOURCE_BADGES[doc.search_source].label}
+                      </Badge>
+                      {doc.search_source === "both" && (
+                        <Badge bg={KNN_BOTH_BADGE.bg} text={KNN_BOTH_BADGE.text as "dark"} style={{ fontSize: "0.6rem" }}>
+                          {KNN_BOTH_BADGE.label}
+                        </Badge>
+                      )}
+                    </>
+                  )}
+                  <Badge bg="primary-subtle" text="primary" className="text-nowrap">
+                    {t("chat.score", { score: doc.score.toFixed(3) })}
+                  </Badge>
+                </span>
               </div>
               <p className="mb-0 text-body-secondary" style={{ whiteSpace: "pre-wrap" }}>
                 {doc.excerpt}
@@ -203,11 +229,13 @@ export default function HistoryPage() {
           <div className="d-flex flex-column gap-3 mb-4">
             {data.items.map((item) => {
               const meta = item.response_metadata;
+              const isFailed = meta?.failed === true;
+              const errorType = meta?.error_type as string | undefined;
               const docCount = (item.context_docs ?? []).length;
               return (
                 <div
                   key={item.id}
-                  className="p-3 rounded border bg-body-secondary"
+                  className={`p-3 rounded border ${isFailed ? "border-danger-subtle bg-danger-subtle" : "bg-body-secondary"}`}
                   role="button"
                   onClick={() => setDetail(item)}
                   style={{ cursor: "pointer" }}
@@ -215,27 +243,41 @@ export default function HistoryPage() {
                   <div className="d-flex justify-content-between align-items-start">
                     <div className="flex-grow-1 me-3">
                       <p className="mb-1 fw-semibold text-truncate">{item.question}</p>
-                      <p
-                        className="mb-0 small text-body-secondary"
-                        style={{
-                          display: "-webkit-box",
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: "vertical",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {item.answer}
-                      </p>
+                      {isFailed ? (
+                        <p className="mb-0 small text-danger">
+                          <i className="bi bi-exclamation-triangle me-1" />
+                          {errorType === "timeout" ? t("history.errorTypeTimeout") : t("history.errorTypeServer")}
+                        </p>
+                      ) : (
+                        <p
+                          className="mb-0 small text-body-secondary"
+                          style={{
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {item.answer}
+                        </p>
+                      )}
                     </div>
                     <div className="d-flex flex-column align-items-end gap-1 flex-shrink-0">
-                      <Badge bg="secondary-subtle" text="secondary" className="text-nowrap">
-                        {item.instance_name}
-                      </Badge>
+                      <div className="d-flex gap-1">
+                        {isFailed && (
+                          <Badge bg="danger" className="text-nowrap">
+                            {t("history.failed")}
+                          </Badge>
+                        )}
+                        <Badge bg="secondary-subtle" text="secondary" className="text-nowrap">
+                          {item.instance_name}
+                        </Badge>
+                      </div>
                       <small className="text-body-secondary text-nowrap">
                         {new Date(item.created_at).toLocaleString()}
                       </small>
                       <div className="d-flex align-items-center gap-2">
-                        {docCount > 0 && (
+                        {!isFailed && docCount > 0 && (
                           <small className="text-body-secondary text-nowrap">
                             <i className="bi bi-file-earmark-text me-1" />
                             {docCount}
@@ -284,24 +326,44 @@ export default function HistoryPage() {
 
       {/* Detail Modal */}
       <Modal show={!!detail} onHide={() => setDetail(null)} size="lg" scrollable>
-        {detail && (
-          <>
-            <Modal.Header closeButton>
-              <Modal.Title className="fs-6 text-truncate">{detail.question}</Modal.Title>
-            </Modal.Header>
-            <Modal.Body>
-              <div
-                className="markdown-body"
-                dangerouslySetInnerHTML={{
-                  __html: DOMPurify.sanitize(marked.parse(detail.answer) as string),
-                }}
-              />
+        {detail && (() => {
+          const detailMeta = detail.response_metadata;
+          const detailFailed = detailMeta?.failed === true;
+          const detailErrorType = detailMeta?.error_type as string | undefined;
+          const detailErrorMsg = detailMeta?.error_message as string | undefined;
+          return (
+            <>
+              <Modal.Header closeButton>
+                <Modal.Title className="fs-6 text-truncate">{detail.question}</Modal.Title>
+              </Modal.Header>
+              <Modal.Body>
+                {detailFailed ? (
+                  <Alert variant="danger" className="d-flex align-items-start gap-2">
+                    <i className="bi bi-exclamation-triangle-fill flex-shrink-0 mt-1" />
+                    <div>
+                      <div className="fw-semibold">
+                        {detailErrorType === "timeout" ? t("history.errorTypeTimeout") : t("history.errorTypeServer")}
+                      </div>
+                      {detailErrorMsg && (
+                        <div className="mt-1 small font-monospace">{detailErrorMsg}</div>
+                      )}
+                    </div>
+                  </Alert>
+                ) : (
+                  <div
+                    className="markdown-body"
+                    dangerouslySetInnerHTML={{
+                      __html: DOMPurify.sanitize(marked.parse(detail.answer) as string),
+                    }}
+                  />
+                )}
 
-              <TimingSection meta={detail.response_metadata} />
-              <SourcesSection docs={contextDocs} />
-            </Modal.Body>
-          </>
-        )}
+                <TimingSection meta={detailMeta} />
+                {!detailFailed && <SourcesSection docs={contextDocs} />}
+              </Modal.Body>
+            </>
+          );
+        })()}
       </Modal>
     </div>
   );

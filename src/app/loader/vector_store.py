@@ -154,6 +154,11 @@ class VectorStore:
         Scores are normalized via the OpenSearch normalization-processor pipeline
         and combined as: score = bm25_weight * bm25_score + knn_weight * knn_score.
 
+        Each result carries search_source in its metadata:
+          "bm25"  — only found by BM25 (lexical match)
+          "knn"   — only found by kNN (semantic similarity)
+          "both"  — found by both methods
+
         Returns:
             List of (Document, score) tuples, ordered by combined score descending.
         """
@@ -162,7 +167,7 @@ class VectorStore:
 
         query_embedding = self.embeddings.embed_query(query)
 
-        search_body = {
+        hybrid_body = {
             '_source': {'excludes': ['vector_field']},
             'size': k,
             'query': {
@@ -177,7 +182,7 @@ class VectorStore:
 
         try:
             response = self._get_raw_client().search(
-                body=search_body,
+                body=hybrid_body,
                 index=self._index_name,
                 params={'search_pipeline': self.config.hybrid_search_pipeline_name},
             )
@@ -185,14 +190,41 @@ class VectorStore:
             logger.error(f'Hybrid search failed: {e}')
             raise
 
+        # Tagging: BM25-only and kNN-only in one msearch call (IDs only, no _source).
+        bm25_ids: set[str] = set()
+        knn_ids: set[str] = set()
+        try:
+            tag_resp = self._get_raw_client().msearch(body=[
+                {'index': self._index_name},
+                {'_source': False, 'size': k, 'query': {'match': {'text': {'query': query}}}},
+                {'index': self._index_name},
+                {'_source': False, 'size': k, 'query': {'knn': {'vector_field': {'vector': query_embedding, 'k': k}}}},
+            ])
+            bm25_ids = {h['_id'] for h in tag_resp['responses'][0].get('hits', {}).get('hits', [])}
+            knn_ids  = {h['_id'] for h in tag_resp['responses'][1].get('hits', {}).get('hits', [])}
+        except Exception:
+            logger.warning('Search source tagging failed — labels will be omitted')
+
         results: list[tuple[Document, float]] = []
         for hit in response['hits']['hits']:
             source = hit['_source']
             score = round(float(hit['_score']), 4)
+            hit_id = hit['_id']
             content = source.get('text', '')
             nested = source.get('metadata')
-            metadata = dict(nested) if isinstance(nested, dict) else {k: v for k, v in source.items() if k != 'text'}
+            metadata = dict(nested) if isinstance(nested, dict) else {key: val for key, val in source.items() if key != 'text'}
             metadata['score'] = score
+
+            in_bm25 = hit_id in bm25_ids
+            in_knn  = hit_id in knn_ids
+            if in_bm25 and in_knn:
+                metadata['search_source'] = 'both'
+            elif in_bm25:
+                metadata['search_source'] = 'bm25'
+            elif in_knn:
+                metadata['search_source'] = 'knn'
+            # else: no tag (tagging failed or edge case)
+
             results.append((Document(page_content=content, metadata=metadata), score))
 
         return results

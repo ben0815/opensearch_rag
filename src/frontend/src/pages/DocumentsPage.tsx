@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Badge, Button, Modal, ProgressBar, Spinner, Table } from "react-bootstrap";
 import { useTranslation } from "react-i18next";
 import { documents as docsApi } from "@/api/client";
@@ -22,6 +22,9 @@ export default function DocumentsPage() {
   const [docs, setDocs] = useState<DocumentOut[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  type SortKey = keyof Pick<DocumentOut, "title" | "page_count" | "chunk_count" | "file_size" | "indexed_date">;
+  const [sortKey, setSortKey] = useState<SortKey>("indexed_date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [deletingHash, setDeletingHash] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -29,6 +32,31 @@ export default function DocumentsPage() {
 
   const canManage =
     user?.is_global_admin || selectedInstance?.role === "manager";
+
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  }
+
+  function sortIcon(key: SortKey) {
+    if (key !== sortKey) return <i className="bi bi-arrow-down-up ms-1 text-body-tertiary" />;
+    return sortDir === "asc"
+      ? <i className="bi bi-arrow-up ms-1" />
+      : <i className="bi bi-arrow-down ms-1" />;
+  }
+
+  const sortedDocs = useMemo(() => {
+    return [...docs].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      const cmp = typeof av === "string" ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [docs, sortKey, sortDir]);
 
   const { files: uploadFiles, uploading, upload, reset: resetUpload } = useDocumentUpload(
     selectedInstance?.id ?? 0,
@@ -129,16 +157,26 @@ export default function DocumentsPage() {
         <Table responsive hover>
           <thead>
             <tr>
-              <th>{t("common.name")}</th>
-              <th>Seiten</th>
-              <th>Chunks</th>
-              <th>Größe</th>
-              <th>Indiziert</th>
+              <th style={{ cursor: "pointer" }} onClick={() => handleSort("title")}>
+                {t("common.name")}{sortIcon("title")}
+              </th>
+              <th style={{ cursor: "pointer" }} onClick={() => handleSort("page_count")}>
+                Seiten{sortIcon("page_count")}
+              </th>
+              <th style={{ cursor: "pointer" }} onClick={() => handleSort("chunk_count")}>
+                Chunks{sortIcon("chunk_count")}
+              </th>
+              <th style={{ cursor: "pointer" }} onClick={() => handleSort("file_size")}>
+                Größe{sortIcon("file_size")}
+              </th>
+              <th style={{ cursor: "pointer" }} onClick={() => handleSort("indexed_date")}>
+                Indiziert{sortIcon("indexed_date")}
+              </th>
               {canManage && <th />}
             </tr>
           </thead>
           <tbody>
-            {docs.map((doc) => (
+            {sortedDocs.map((doc) => (
               <tr key={doc.sha256}>
                 <td>
                   <i className="bi bi-file-earmark-pdf text-danger me-2" />
