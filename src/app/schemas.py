@@ -135,6 +135,14 @@ class ChatHistoryPatchRequest(BaseModel):
     ttft_s: float | None = None
 
 
+class ChatHistoryFailedRequest(BaseModel):
+    question: str
+    instance_id: int
+    error_type: str  # "timeout" | "server_error"
+    error_message: str | None = None
+    duration_s: float | None = None
+
+
 class PaginatedChatHistory(BaseModel):
     items: list[ChatHistoryOut]
     total: int
@@ -317,6 +325,7 @@ class AuditLogOut(BaseModel):
     detail: dict | None = None
     ip_address: str | None = None
     created_at: datetime
+    ldap_uid: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

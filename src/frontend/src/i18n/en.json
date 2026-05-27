@@ -82,7 +82,10 @@
     "duration": "Duration",
     "retrieval": "Retrieval",
     "llmTime": "LLM",
-    "totalTime": "Total"
+    "totalTime": "Total",
+    "failed": "Failed",
+    "errorTypeTimeout": "Timeout (LLM not responding)",
+    "errorTypeServer": "Server error"
   },
   "admin": {
     "title": "Administration",

@@ -36,6 +36,9 @@ async def _check_ollama_model(ollama_host: str, model_name: str) -> tuple[bool, 
         return True, ""
 
 
+_SETTINGS_SPEC_KEYS = {s["key"] for s in _SETTINGS_SPEC}
+
+
 @router.get("")
 async def get_settings(
     admin=Depends(_require_admin),
@@ -43,7 +46,9 @@ async def get_settings(
     config: LoaderConfig = Depends(get_config),
 ):
     rows = (await db.execute(select(AppSetting))).scalars().all()
-    settings = [SettingOut(key=r.key, value=r.value, updated_at=r.updated_at) for r in rows]
+    # Only expose keys that belong to the general settings spec — never LDAP or other keys.
+    settings = [SettingOut(key=r.key, value=r.value, updated_at=r.updated_at)
+                for r in rows if r.key in _SETTINGS_SPEC_KEYS]
     spec = [SettingSpec(**s) for s in _SETTINGS_SPEC]
     return SettingsResponse(settings=settings, spec=spec, config_snapshot={}).model_dump(mode="json")
 
@@ -63,6 +68,11 @@ async def update_settings(
     from app.rag import validate_system_prompt
 
     for key, raw in body.values.items():
+        # Reject keys that are not part of the settings spec — prevents LDAP and other
+        # app_settings entries from being silently overwritten (and comma-mangled).
+        if key not in _SETTINGS_SPEC_KEYS:
+            continue
+
         if key == "llm_system_prompt":
             raw_str = str(raw)
             if not raw_str.strip():

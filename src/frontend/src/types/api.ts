@@ -245,6 +245,7 @@ export interface AuditLogOut {
   detail: Record<string, unknown> | null;
   ip_address: string | null;
   created_at: string;
+  ldap_uid: string | null;
 }
 
 export interface PaginatedAuditLog {
@@ -271,6 +272,7 @@ export interface SourceChunk {
   filename: string;
   page: number | null;
   score: number;
+  search_source?: "bm25" | "knn" | "both" | null;
   excerpt: string;
 }
 

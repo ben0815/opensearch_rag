@@ -82,7 +82,10 @@
     "duration": "Laufzeit",
     "retrieval": "Retrieval",
     "llmTime": "LLM",
-    "totalTime": "Gesamt"
+    "totalTime": "Gesamt",
+    "failed": "Fehlgeschlagen",
+    "errorTypeTimeout": "Zeitüberschreitung (LLM antwortet nicht)",
+    "errorTypeServer": "Serverfehler"
   },
   "admin": {
     "title": "Administration",

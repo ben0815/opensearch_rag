@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.dependencies import get_config, limiter, _get_user_or_ip
 from app.loader.config import LoaderConfig
 from app.schemas import (
+    ChatHistoryFailedRequest,
     ChatHistoryOut,
     ChatHistoryPatchRequest,
     ChatRequest,
@@ -58,13 +59,32 @@ async def chat_stream(
         select(ChatHistory)
         .where(ChatHistory.user_id == user.id, ChatHistory.instance_id == instance_id)
         .order_by(ChatHistory.created_at.desc())
-        .limit(3)
+        .limit(10)
     )
-    recent_history = list(reversed((await db.execute(history_stmt)).scalars().all()))
+    all_recent = (await db.execute(history_stmt)).scalars().all()
+    # Exclude failed entries — they have no answer and must not appear as conversation context
+    recent_history = list(reversed([
+        h for h in all_recent
+        if not (h.response_metadata or {}).get("failed")
+    ][:3]))
 
     effective_config = get_effective_config(config, instance.settings)
     question = body.question
     user_id = user.id
+
+    # Audit: jede Chat-Anfrage sofort erfassen — auch wenn sie später fehlschlägt
+    # oder der Client die Verbindung trennt, bevor event: done ankommt.
+    try:
+        db.add(AuditLog(
+            user_id=user_id,
+            action="chat_start",
+            target_type="instance",
+            target_id=str(instance_id),
+            detail={"question_len": len(question)},
+        ))
+        await db.commit()
+    except Exception:
+        logger.warning("chat_start Audit-Log fehlgeschlagen", exc_info=True)
 
     def _generator():
         try:
@@ -196,6 +216,55 @@ async def get_history(
     return PaginatedChatHistory(
         items=items, total=total, page=page, total_pages=total_pages,
     ).model_dump(mode="json")
+
+
+@router.post("/history/failed", status_code=201)
+async def report_failed_chat(
+    request: Request,
+    body: ChatHistoryFailedRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Record a failed chat request (timeout or server error) in the history."""
+    user = request.state.user
+
+    instance = (await db.execute(
+        select(Instance).where(Instance.id == body.instance_id)
+    )).scalar_one_or_none()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instanz nicht gefunden")
+
+    if not user.is_global_admin:
+        role = await get_effective_role(db, user, body.instance_id)
+        if role is None:
+            raise HTTPException(status_code=403, detail="Kein Zugriff auf diese Instanz")
+
+    entry = ChatHistory(
+        user_id=user.id,
+        instance_id=body.instance_id,
+        question=body.question,
+        answer="",
+        context_docs=None,
+        response_metadata={
+            "failed": True,
+            "error_type": body.error_type,
+            "error_message": body.error_message,
+            "duration_s": body.duration_s,
+        },
+    )
+    db.add(entry)
+    db.add(AuditLog(
+        user_id=user.id,
+        action="chat_failed",
+        target_type="instance",
+        target_id=str(body.instance_id),
+        detail={
+            "error_type": body.error_type,
+            "error_message": body.error_message,
+            "duration_s": body.duration_s,
+        },
+    ))
+    await db.commit()
+    return {"ok": True}
 
 
 @router.patch("/history/{entry_id}")

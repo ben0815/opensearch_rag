@@ -213,12 +213,29 @@ export const adminStatus = {
 // ─── Admin – Audit ────────────────────────────────────────────────────────────
 
 export const adminAudit = {
-  list: (params?: { page?: number; per_page?: number; action?: string; user_id?: number }) => {
+  list: (params?: {
+    page?: number;
+    per_page?: number;
+    action?: string;
+    user_id?: number;
+    username?: string;
+    ip?: string;
+    date_from?: string;
+    date_to?: string;
+    order_by?: "created_at" | "ip_address" | "action" | "user_id";
+    order_dir?: "asc" | "desc";
+  }) => {
     const q = new URLSearchParams();
     if (params?.page) q.set("page", String(params.page));
     if (params?.per_page) q.set("per_page", String(params.per_page));
     if (params?.action) q.set("action", params.action);
     if (params?.user_id) q.set("user_id", String(params.user_id));
+    if (params?.username) q.set("username", params.username);
+    if (params?.ip) q.set("ip", params.ip);
+    if (params?.date_from) q.set("date_from", params.date_from);
+    if (params?.date_to) q.set("date_to", params.date_to);
+    if (params?.order_by) q.set("order_by", params.order_by);
+    if (params?.order_dir) q.set("order_dir", params.order_dir);
     return get<PaginatedAuditLog>(`/api/admin/audit?${q}`);
   },
 };
