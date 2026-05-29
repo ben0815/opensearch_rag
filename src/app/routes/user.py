@@ -1,15 +1,67 @@
-"""User self-service routes: profile, preferences, accessible instances."""
+"""User self-service routes: profile, preferences, accessible instances, presence."""
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import User
+from app.db.models import Session, User
+from app.auth.session import _utcnow
 from app.db.session import get_db
-from app.schemas import InstanceOut, UserPatchRequest, user_out
+from app.dependencies import limiter, _get_user_or_ip
+from app.schemas import InstanceOut, UserPatchRequest, UserPresenceOut, user_out
+from app.services.config_service import get_app_setting
 from app.services.user_service import get_user_instances
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/users/presence")
+@limiter.limit("120/minute", key_func=_get_user_or_ip)
+async def get_presence(request: Request, db: AsyncSession = Depends(get_db)):
+    """Liefert alle aktuell angemeldeten Nutzer (außer dem anfragenden selbst)."""
+    presence_enabled = await get_app_setting(db, "presence_enabled")
+    if presence_enabled == "false":
+        return []
+
+    current_user_id = request.state.user.id
+    # Subquery returns distinct user_ids with active non-impersonation sessions.
+    # Avoids SELECT DISTINCT on users.preferences (JSON has no equality operator in PG).
+    active_user_ids = (
+        select(Session.user_id)
+        .where(
+            Session.expires_at > _utcnow(),
+            Session.is_impersonation == False,  # noqa: E712
+            Session.user_id != current_user_id,
+        )
+        .distinct()
+        .scalar_subquery()
+    )
+    stmt = select(User).where(
+        User.id.in_(active_user_ids),
+        User.is_active == True,  # noqa: E712
+    )
+    online_users = (await db.execute(stmt)).scalars().all()
+
+    querying_ids: set[int] = set()
+    if online_users:
+        redis = request.app.state.redis
+        user_ids = [u.id for u in online_users]
+        keys = [f"presence:querying:{uid}" for uid in user_ids]
+        try:
+            values = await redis.mget(*keys)
+            querying_ids = {uid for uid, v in zip(user_ids, values) if v is not None}
+        except Exception:
+            pass
+
+    return [
+        UserPresenceOut(
+            id=u.id,
+            display_name=u.display_name,
+            ldap_uid=u.ldap_uid,
+            is_querying=u.id in querying_ids,
+        ).model_dump(mode="json")
+        for u in online_users
+    ]
 
 
 @router.get("/instances")

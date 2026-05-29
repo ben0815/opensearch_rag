@@ -21,6 +21,7 @@ import type {
   StatusOut,
   UserOut,
   UserPreferences,
+  UserPresenceOut,
 } from "@/types/api";
 
 class ApiError extends Error {
@@ -121,6 +122,12 @@ export const chat = {
 export const documents = {
   list: (instanceId: number) => get<DocumentOut[]>(`/api/documents/${instanceId}`),
   delete: (instanceId: number, hash: string) => del(`/api/documents/${instanceId}/${hash}`),
+};
+
+// ─── Presence ─────────────────────────────────────────────────────────────────
+
+export const presence = {
+  list: (signal?: AbortSignal) => get<UserPresenceOut[]>("/api/users/presence", signal),
 };
 
 // ─── Admin – Instances ────────────────────────────────────────────────────────

@@ -130,6 +130,17 @@ _SETTINGS_SPEC: list[dict] = [
         "inputmode": None, "min": 7, "max": 3650, "step": 1,
         "hint": "Standard: 90 Tage", "description": None,
     },
+    {
+        "key": "presence_enabled", "label": "Präsenzanzeige", "type": "text",
+        "inputmode": None, "min": None, "max": None, "step": None,
+        "hint": "true | false",
+        "description": (
+            "Zeigt angemeldete Benutzer in der Sidebar an.\n\n"
+            "true  = Feature aktiv\n"
+            "false = Feature deaktiviert, Sidebar zeigt keine Präsenzliste\n\n"
+            "Leer lassen = aktiv (Standard) — kein Eintrag nötig um das Feature zu aktivieren."
+        ),
+    },
 ]
 
 _CASTMAP: dict[str, type] = {
@@ -137,7 +148,7 @@ _CASTMAP: dict[str, type] = {
     "llm_timeout_seconds": int, "llm_system_prompt": str,
     "hybrid_bm25_weight": float, "hybrid_k": int, "hybrid_score_threshold": float,
     "session_lifetime_hours": int, "max_upload_mb": int,
-    "maintenance_mode": str, "audit_retention_days": int,
+    "maintenance_mode": str, "audit_retention_days": int, "presence_enabled": str,
 }
 
 

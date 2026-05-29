@@ -112,6 +112,12 @@ body,
   border-color: var(--bs-primary);
 }
 
+/* Presence pulse animation */
+@keyframes presence-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 /* Impersonation banner */
 .impersonation-banner {
   background: var(--bs-warning);

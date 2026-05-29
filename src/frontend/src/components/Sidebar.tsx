@@ -4,6 +4,7 @@ import { auth } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
 import { useInstanceStore } from "@/stores/instanceStore";
 import InstanceSelector from "./InstanceSelector";
+import OnlineUsers from "./OnlineUsers";
 import ThemeToggle from "./ThemeToggle";
 
 interface SidebarProps {
@@ -77,6 +78,9 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
           <span className="sidebar-label">{t("admin.title")}</span>
         </NavLink>
       )}
+
+      <hr className="my-1 mx-2" style={{ borderColor: "var(--bs-border-color)", opacity: 1 }} />
+      <OnlineUsers collapsed={collapsed} />
 
       <div className="mt-auto d-flex flex-column gap-1">
         <ThemeToggle collapsed={collapsed} />

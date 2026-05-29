@@ -353,6 +353,15 @@ class StatusOut(BaseModel):
     postgres: dict
 
 
+# ─── Presence ─────────────────────────────────────────────────────────────────
+
+class UserPresenceOut(BaseModel):
+    id: int
+    display_name: str | None = None
+    ldap_uid: str
+    is_querying: bool
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def user_out(

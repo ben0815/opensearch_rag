@@ -130,6 +130,12 @@
     "auditRetentionDays": "Audit-Aufbewahrung (Tage)",
     "saved": "Einstellungen gespeichert"
   },
+  "presence": {
+    "title": "Angemeldet",
+    "querying": "Stellt gerade eine Frage",
+    "online": "Angemeldet",
+    "more": "… und {{count}} weitere"
+  },
   "nav": {
     "collapse": "Menü einklappen",
     "expand": "Menü ausklappen"

@@ -39,7 +39,7 @@
     "title": "Chat",
     "placeholder": "Enter your question…",
     "send": "Send",
-    "thinking": "Generating answer…",
+    "thinking": "Searching sources…",
     "composing": "Composing answer…",
     "sources": "Sources",
     "noAnswer": "No answer received.",
@@ -129,6 +129,12 @@
     "maxUploadMb": "Max upload size (MB)",
     "auditRetentionDays": "Audit retention (days)",
     "saved": "Settings saved"
+  },
+  "presence": {
+    "title": "Online",
+    "querying": "Currently asking a question",
+    "online": "Online",
+    "more": "… and {{count}} more"
   },
   "nav": {
     "collapse": "Collapse menu",

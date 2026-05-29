@@ -20,6 +20,13 @@ export interface UserOut {
   impersonated_by: string | null;
 }
 
+export interface UserPresenceOut {
+  id: number;
+  display_name: string | null;
+  ldap_uid: string;
+  is_querying: boolean;
+}
+
 export interface LoginRequest {
   username: string;
   password: string;

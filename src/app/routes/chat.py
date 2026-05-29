@@ -72,6 +72,11 @@ async def chat_stream(
     question = body.question
     user_id = user.id
 
+    try:
+        await request.app.state.redis.set(f"presence:querying:{user_id}", "1", ex=300)
+    except Exception:
+        logger.warning("Presence-Key konnte nicht gesetzt werden", exc_info=True)
+
     # Audit: jede Chat-Anfrage sofort erfassen — auch wenn sie später fehlschlägt
     # oder der Client die Verbindung trennt, bevor event: done ankommt.
     try:
