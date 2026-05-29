@@ -20,7 +20,7 @@ _MAX_LLM_CACHE = 10
 _llm_cache: dict[str, OllamaLLM] = {}
 _llm_cache_lock = threading.Lock()
 
-DEFAULT_SYSTEM_PROMPT = """/no_think Du bist ein präziser Assistent. Beantworte die Frage ausschließlich \
+DEFAULT_SYSTEM_PROMPT = """Du bist ein präziser Assistent. Beantworte die Frage ausschließlich \
 auf Basis der folgenden Kontext-Abschnitte aus den Dokumenten. Antworte ausschließlich auf Deutsch.
 
 Wenn die Antwort nicht im Kontext enthalten ist, antworte exakt:
@@ -110,6 +110,8 @@ def get_llm(config: LoaderConfig) -> OllamaLLM:
             temperature=config.llm_temperature,
             timeout=config.llm_timeout_seconds,
             num_ctx=config.llm_num_ctx,
+            keep_alive=-1,
+            reasoning=False,
         )
         _llm_cache[cache_key] = llm
 
