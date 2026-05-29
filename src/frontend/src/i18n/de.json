@@ -39,7 +39,7 @@
     "title": "Chat",
     "placeholder": "Frage eingeben…",
     "send": "Senden",
-    "thinking": "Antwort wird generiert…",
+    "thinking": "Quellen werden gesucht…",
     "composing": "Antwort wird zusammengestellt…",
     "sources": "Quellen",
     "noAnswer": "Keine Antwort erhalten.",

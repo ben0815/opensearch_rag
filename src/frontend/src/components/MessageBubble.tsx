@@ -34,20 +34,23 @@ export default function MessageBubble({ message }: Props) {
   const hasSources = (message.sources?.length ?? 0) > 0;
   // Treat leading whitespace / lone newlines as "not yet real text"
   const hasRealContent = message.content.trim().length > 0;
+  // pending is false once the stream ends (done, error, or abort) — don't
+  // show the spinner after an error cleared the content without adding text.
+  const isWaiting = !hasRealContent && message.pending !== false;
 
   return (
     <div className="d-flex justify-content-start mb-3">
       <div className="chat-bubble assistant" style={{ maxWidth: "85%" }}>
-        {!hasRealContent ? (
+        {isWaiting ? (
           <ThinkingIndicator
             label={hasSources ? t("chat.composing") : undefined}
           />
-        ) : (
+        ) : hasRealContent ? (
           <div
             className="markdown-body"
             dangerouslySetInnerHTML={{ __html: html }}
           />
-        )}
+        ) : null}
         {hasSources && (
           <SourcesPanel sources={message.sources!} />
         )}

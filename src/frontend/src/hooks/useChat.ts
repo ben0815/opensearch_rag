@@ -182,7 +182,7 @@ export function useChat({ instanceId, onDone }: UseChatOptions) {
                     setMessages((prev) =>
                       prev.map((m) =>
                         m.id === assistantMsg.id
-                          ? { ...m, content: fullAnswer, pending: false }
+                          ? { ...m, content: fullAnswer }
                           : m,
                       ),
                     );
