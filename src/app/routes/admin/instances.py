@@ -129,6 +129,21 @@ async def patch_admin_instance(
                 except (ValueError, TypeError):
                     pass
 
+        # BM25-Gewicht: kNN-Gewicht wird automatisch als Komplement berechnet
+        raw_bm25 = body.settings.get("hybrid_bm25_weight")
+        if raw_bm25 is not None:
+            if raw_bm25 == "":
+                overrides.pop("hybrid_bm25_weight", None)
+                overrides.pop("hybrid_knn_weight", None)
+            else:
+                try:
+                    bm25 = float(str(raw_bm25).replace(",", "."))
+                    if 0.0 <= bm25 <= 1.0:
+                        overrides["hybrid_bm25_weight"] = bm25
+                        overrides["hybrid_knn_weight"] = round(1.0 - bm25, 6)
+                except (ValueError, TypeError):
+                    pass
+
         raw_prompt = body.settings.get("llm_system_prompt")
         if raw_prompt is not None:
             prompt_str = str(raw_prompt).strip()

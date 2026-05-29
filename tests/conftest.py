@@ -71,7 +71,7 @@ async def _db_tables():
 
 @pytest.fixture
 def fake_redis_instance():
-    r = fakeredis.FakeRedis()
+    r = fakeredis.aioredis.FakeRedis()
     yield r
     r.flushall()
 

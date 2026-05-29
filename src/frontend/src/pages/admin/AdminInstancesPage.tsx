@@ -195,7 +195,7 @@ function InstancePromptField({ value, onChange }: { value: string; onChange: (v:
 
 // ─── Edit form ────────────────────────────────────────────────────────────────
 
-const OVERRIDE_KEYS = ["llm_model", "llm_temperature", "llm_num_ctx", "hybrid_k", "hybrid_score_threshold", "llm_system_prompt"] as const;
+const OVERRIDE_KEYS = ["llm_model", "llm_temperature", "llm_num_ctx", "hybrid_k", "hybrid_score_threshold", "hybrid_bm25_weight", "llm_system_prompt"] as const;
 
 function countOverrides(settings: Record<string, unknown> | null): number {
   if (!settings) return 0;
@@ -215,6 +215,7 @@ type EditForm = {
   llm_num_ctx: string;
   hybrid_k: string;
   hybrid_score_threshold: string;
+  hybrid_bm25_weight: string;
   llm_system_prompt: string;
 };
 
@@ -230,6 +231,7 @@ function editFormFromInst(inst: InstanceAdminOut): EditForm {
     llm_num_ctx: s.llm_num_ctx != null ? String(s.llm_num_ctx) : "",
     hybrid_k: s.hybrid_k != null ? String(s.hybrid_k) : "",
     hybrid_score_threshold: s.hybrid_score_threshold != null ? String(s.hybrid_score_threshold) : "",
+    hybrid_bm25_weight: s.hybrid_bm25_weight != null ? String(s.hybrid_bm25_weight) : "",
     llm_system_prompt: s.llm_system_prompt ? String(s.llm_system_prompt) : "",
   };
 }
@@ -349,6 +351,7 @@ export default function AdminInstancesPage() {
       if (editForm.llm_num_ctx.trim()) settings.llm_num_ctx = parseInt(editForm.llm_num_ctx, 10);
       if (editForm.hybrid_k.trim()) settings.hybrid_k = parseInt(editForm.hybrid_k, 10);
       if (editForm.hybrid_score_threshold.trim()) settings.hybrid_score_threshold = parseFloat(editForm.hybrid_score_threshold.replace(",", "."));
+      settings.hybrid_bm25_weight = editForm.hybrid_bm25_weight.trim() || "";
       if (editForm.llm_system_prompt.trim()) settings.llm_system_prompt = editForm.llm_system_prompt.trim();
 
       await adminInstances.patch(editingInst.id, {
@@ -725,6 +728,22 @@ export default function AdminInstancesPage() {
                             <Form.Group>
                               <Form.Label className="small">Score-Threshold</Form.Label>
                               <Form.Control size="sm" type="text" inputMode="decimal" placeholder="(global)" value={editForm.hybrid_score_threshold} onChange={ef("hybrid_score_threshold")} />
+                            </Form.Group>
+                          </div>
+                          <div className="col-sm-6">
+                            <Form.Group>
+                              <Form.Label className="small">BM25-Gewicht (0.0–1.0)</Form.Label>
+                              <Form.Control
+                                size="sm" type="text" inputMode="decimal"
+                                placeholder="(global)"
+                                value={editForm.hybrid_bm25_weight}
+                                onChange={ef("hybrid_bm25_weight")}
+                              />
+                              {editForm.hybrid_bm25_weight.trim() && !isNaN(parseFloat(editForm.hybrid_bm25_weight.replace(",", "."))) && (
+                                <div className="text-body-secondary mt-1" style={{ fontSize: "0.75rem" }}>
+                                  kNN-Gewicht: {(1 - parseFloat(editForm.hybrid_bm25_weight.replace(",", "."))).toFixed(2)}
+                                </div>
+                              )}
                             </Form.Group>
                           </div>
                           <div className="col-12">

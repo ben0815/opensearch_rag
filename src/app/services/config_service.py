@@ -17,6 +17,8 @@ _INSTANCE_OVERRIDABLE = {
     "llm_num_ctx": int,
     "hybrid_k": int,
     "hybrid_score_threshold": float,
+    "hybrid_bm25_weight": float,
+    "hybrid_knn_weight": float,
     "llm_system_prompt": str,
 }
 

@@ -379,4 +379,7 @@ if _frontend_dist.exists():
     @app.get("/{full_path:path}")
     async def _spa_catchall(request: Request, full_path: str):
         from fastapi.responses import FileResponse
-        return FileResponse(str(_frontend_dist / "index.html"))
+        return FileResponse(
+            str(_frontend_dist / "index.html"),
+            headers={"Cache-Control": "no-store"},
+        )
