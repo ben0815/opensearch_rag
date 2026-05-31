@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from collections import OrderedDict
 from typing import TYPE_CHECKING
@@ -76,13 +77,19 @@ class VectorStore:
             raise ValueError(f'Error initializing Ollama embeddings: {e}') from e
 
     def _get_ssl_kwargs(self) -> dict:
-        """Common SSL/auth kwargs for OpenSearch clients (handles self-signed demo cert)."""
+        """Common SSL/auth kwargs for OpenSearch clients.
+        Zertifikatsverifikation per OPENSEARCH_VERIFY_CERTS steuerbar (default: false, da
+        Bestandsdeployment oft selbstsigniertes Zertifikat nutzt).
+        Für Produktion: OPENSEARCH_VERIFY_CERTS=true + OPENSEARCH_CA_CERTS=/pfad/ca.pem setzen."""
         use_ssl = self.config.opensearch_url.startswith("https://")
         kwargs: dict = {}
         if use_ssl:
+            verify_certs = os.getenv("OPENSEARCH_VERIFY_CERTS", "false").lower() == "true"
+            ca_certs = os.getenv("OPENSEARCH_CA_CERTS") or None
             kwargs.update(
                 use_ssl=True,
-                verify_certs=False,
+                verify_certs=verify_certs,
+                ca_certs=ca_certs,
                 ssl_show_warn=False,
             )
         if self.config.opensearch_username and self.config.opensearch_password:

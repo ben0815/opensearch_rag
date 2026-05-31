@@ -81,7 +81,7 @@ services:
         - PIP_NO_CACHE_DIR=1
     container_name: app
     ports:
-      - "${APP_BIND_HOST:-0.0.0.0}:8081:8081"
+      - "${APP_BIND_HOST:-127.0.0.1}:8081:8081"
     environment:
       # Service connections
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}

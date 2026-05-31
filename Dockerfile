@@ -48,7 +48,6 @@ COPY pyproject.toml .
 COPY src/ src/
 COPY alembic.ini .
 COPY alembic/ alembic/
-#COPY entrypoint.sh .
 COPY infra/scripts/entrypoint.sh ./entrypoint.sh
 
 # Install the application
@@ -103,8 +102,6 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${APP_PORT}/health || exit 1
 
-# Add script to load environment variables
-#COPY --chown=appuser:appuser infra/scripts/entrypoint.sh /app/entrypoint.sh
 COPY --from=builder --chown=appuser:appuser /build/entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 

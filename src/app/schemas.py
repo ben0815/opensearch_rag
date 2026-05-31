@@ -1,8 +1,9 @@
 """Pydantic schemas for the REST API."""
 from __future__ import annotations
 
+import re as _re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -46,8 +47,8 @@ class UserPatchRequest(BaseModel):
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=255)
+    password: str = Field(max_length=1000)
 
 
 class LoginResponse(BaseModel):
@@ -90,6 +91,13 @@ class InstanceCreateRequest(BaseModel):
     description: str = ""
     analyzer: str = "german"
 
+    @field_validator("analyzer")
+    @classmethod
+    def _validate_analyzer(cls, v: str) -> str:
+        if not _re.match(r'^[a-z][a-z0-9_-]{0,63}$', v):
+            raise ValueError("analyzer muss ein gültiger OpenSearch-Analyzer-Name sein (Kleinbuchstaben, Ziffern, _ oder -)")
+        return v
+
 
 class InstancePatchRequest(BaseModel):
     name: str | None = None
@@ -107,13 +115,13 @@ class InstanceMemberOut(BaseModel):
 
 class AddInstanceMemberRequest(BaseModel):
     user_id: int
-    role: str  # "viewer" | "manager"
+    role: Literal["viewer", "manager"]
 
 
 # ─── Chat ─────────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    question: str
+    question: str = Field(max_length=10_000)
     instance_id: int
 
 
@@ -136,10 +144,10 @@ class ChatHistoryPatchRequest(BaseModel):
 
 
 class ChatHistoryFailedRequest(BaseModel):
-    question: str
+    question: str = Field(max_length=10_000)
     instance_id: int
-    error_type: str  # "timeout" | "server_error"
-    error_message: str | None = None
+    error_type: Literal["timeout", "server_error"]
+    error_message: str | None = Field(default=None, max_length=1_000)
     duration_s: float | None = None
 
 
@@ -166,7 +174,7 @@ class DocumentOut(BaseModel):
 
 class AssignInstanceRequest(BaseModel):
     instance_id: int
-    role: str  # "viewer" | "manager"
+    role: Literal["viewer", "manager"]
 
 
 # ─── Admin – Users ────────────────────────────────────────────────────────────
@@ -224,7 +232,7 @@ class GroupCreateRequest(BaseModel):
 
 class AssignGroupInstanceRequest(BaseModel):
     instance_id: int
-    role: str  # "viewer" | "manager"
+    role: Literal["viewer", "manager"]
 
 
 class AddGroupMemberRequest(BaseModel):

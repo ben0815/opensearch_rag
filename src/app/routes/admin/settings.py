@@ -38,6 +38,17 @@ async def _check_ollama_model(ollama_host: str, model_name: str) -> tuple[bool, 
 
 _SETTINGS_SPEC_KEYS = {s["key"] for s in _SETTINGS_SPEC}
 
+_RANGE_GUARDS: dict[str, tuple] = {
+    "audit_retention_days": (7, 3650),
+    "session_lifetime_hours": (1, 720),
+    "max_upload_mb": (1, 500),
+    "hybrid_k": (1, 100),
+    "hybrid_bm25_weight": (0.0, 1.0),
+    "hybrid_score_threshold": (0.0, 1.0),
+    "llm_num_ctx": (1024, 131072),
+    "llm_timeout_seconds": (10, 600),
+}
+
 
 @router.get("")
 async def get_settings(
@@ -97,6 +108,12 @@ async def update_settings(
         except (ValueError, TypeError):
             errors.append(f"Ungültiger Wert für {key!r}: {raw!r}")
             continue
+
+        lo, hi = _RANGE_GUARDS.get(key, (None, None))
+        if lo is not None and not (lo <= val <= hi):
+            errors.append(f"Wert für {key!r} muss zwischen {lo} und {hi} liegen (war: {val})")
+            continue
+
         if key == "hybrid_bm25_weight":
             new_values["hybrid_bm25_weight"] = val
             new_values["hybrid_knn_weight"] = round(1.0 - float(val), 6)
@@ -157,7 +174,7 @@ async def update_settings(
     if "maintenance_mode" in new_values:
         invalidate_maintenance_cache()
 
-    _audit(db, admin.id, "settings_change", detail={"keys": list(new_values.keys())})
+    _audit(db, admin.id, "settings_change", detail={"keys": list(new_values.keys())}, ip_address=getattr(request.client, "host", None))
     await db.commit()
 
     await bump_config_version(request.app.state.redis)

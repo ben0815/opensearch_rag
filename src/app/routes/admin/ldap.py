@@ -1,10 +1,14 @@
 """Admin-Endpunkte: LDAP-Konfiguration."""
 import asyncio as _asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.ldap_service import build_user_dn
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas import LDAPConfigIn, LDAPConfigOut, LDAPSearchResult
@@ -52,7 +56,7 @@ async def update_ldap(
         data["ldap_bind_password"] = body.ldap_bind_password
     await save_ldap_config(db, data, updated_by=admin.id)
 
-    _audit(db, admin.id, "ldap_config_change", detail={"url": body.ldap_url})
+    _audit(db, admin.id, "ldap_config_change", detail={"url": body.ldap_url}, ip_address=getattr(request.client, "host", None))
     await db.commit()
 
     cfg = await get_ldap_config(db)
@@ -91,9 +95,11 @@ async def test_ldap(
             conn.unbind()
             return {"ok": True, "error": None}
         except LDAPException as exc:
-            return {"ok": False, "error": str(exc)}
+            logger.warning("LDAP-Test fehlgeschlagen: %s", exc)
+            return {"ok": False, "error": "Verbindung fehlgeschlagen"}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            logger.warning("LDAP-Test Fehler: %s", exc)
+            return {"ok": False, "error": "Verbindung fehlgeschlagen"}
 
     return await _asyncio.to_thread(_do_test)
 
@@ -156,12 +162,13 @@ async def search_ldap_users(
             conn.unbind()
             return results
         except LDAPException as exc:
-            raise RuntimeError(str(exc)) from exc
+            logger.warning("LDAP-Suche fehlgeschlagen: %s", exc)
+            raise RuntimeError("LDAP-Suche fehlgeschlagen") from exc
 
     try:
         results = await _asyncio.to_thread(_do_search)
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=f"LDAP-Fehler: {exc}") from exc
+        raise HTTPException(status_code=502, detail="LDAP-Suche fehlgeschlagen") from exc
 
     existing_uids = {
         row[0] for row in (await db.execute(select(User.ldap_uid))).all()
@@ -192,7 +199,7 @@ async def sync_ldap(
     bind_dn = cfg.get("ldap_bind_dn", "")
     bind_pw = cfg.get("ldap_bind_password", "")
 
-    users = (await db.execute(select(User).where(User.is_active == True))).scalars().all()  # noqa: E712
+    users = (await db.execute(select(User).where(User.is_active == True))).scalars().all()
 
     synced = 0
     errors = 0
@@ -216,7 +223,7 @@ async def sync_ldap(
                 "is_global_admin": False,
             }
             if admin_group_dn:
-                user_dn = f"{uid_attr}={ldap_uid},{search_base}"
+                user_dn = build_user_dn(ldap_uid, uid_attr, search_base)
                 conn.search(
                     search_base=admin_group_dn,
                     search_filter=f"(member={escape_filter_chars(user_dn)})",

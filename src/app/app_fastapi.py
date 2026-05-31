@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -99,10 +99,12 @@ _SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
     "Referrer-Policy": "strict-origin-when-cross-origin",
 }
+if _SECURE_COOKIES:
+    _SECURITY_HEADERS["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
         for k, v in _SECURITY_HEADERS.items():
             response.headers[k] = v
@@ -120,7 +122,7 @@ async def _session_cleanup_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"Session cleanup failed: {e}")
+            logger.error("Session cleanup failed: %s", e)
 
 
 async def _audit_cleanup_loop() -> None:
@@ -143,7 +145,7 @@ async def _audit_cleanup_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"Audit cleanup failed: {e}")
+            logger.error("Audit cleanup failed: %s", e)
 
 
 _LLM_KEYS = {"llm_model", "llm_temperature", "llm_num_ctx", "llm_timeout_seconds"}

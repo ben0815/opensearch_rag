@@ -82,7 +82,7 @@ async def create_group(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Gruppenname bereits vergeben")
     group = (await db.execute(select(Group).where(Group.name == body.name))).scalar_one()
-    _audit(db, admin.id, "group_create", "group", group.id, {"name": group.name})
+    _audit(db, admin.id, "group_create", "group", group.id, {"name": group.name}, ip_address=getattr(request.client, "host", None))
     await db.commit()
     return GroupOut(id=group.id, name=group.name, ldap_group_dn=group.ldap_group_dn, created_at=group.created_at).model_dump(mode="json")
 
@@ -96,7 +96,7 @@ async def delete_group(
 ):
     group = (await db.execute(select(Group).where(Group.id == group_id))).scalar_one_or_none()
     if group:
-        _audit(db, admin.id, "group_delete", "group", group_id, {"name": group.name})
+        _audit(db, admin.id, "group_delete", "group", group_id, {"name": group.name}, ip_address=getattr(request.client, "host", None))
         db.delete(group)
         await db.commit()
 

@@ -64,7 +64,7 @@ async def stop_impersonation(
         await delete_session(db, token)
     new_token = await create_session(db, admin_id, lifetime_hours=lifetime_hours)
 
-    _audit(db, admin_id, "impersonation_stop", "user", user.id, {"target_uid": user.ldap_uid})
+    _audit(db, admin_id, "impersonation_stop", "user", user.id, {"target_uid": user.ldap_uid}, ip_address=getattr(request.client, "host", None))
     await db.commit()
 
     response = JSONResponse(user_out(admin_user).model_dump(mode="json"))
@@ -107,7 +107,7 @@ async def set_maintenance(
         existing.updated_by = admin.id
     else:
         db.add(AppSetting(key="maintenance_mode", value=value, updated_at=now, updated_by=admin.id))
-    _audit(db, admin.id, "maintenance_mode_change", detail={"enabled": enabled})
+    _audit(db, admin.id, "maintenance_mode_change", detail={"enabled": enabled}, ip_address=getattr(request.client, "host", None))
     await db.commit()
     invalidate_maintenance_cache()
     return {"maintenance_mode": enabled}

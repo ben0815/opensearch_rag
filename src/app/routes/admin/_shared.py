@@ -169,11 +169,12 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _audit(db, user_id, action, target_type=None, target_id=None, detail=None):
+def _audit(db, user_id, action, target_type=None, target_id=None, detail=None, ip_address=None):
     db.add(AuditLog(
         user_id=user_id,
         action=action,
         target_type=target_type,
         target_id=str(target_id) if target_id is not None else None,
         detail=detail,
+        ip_address=ip_address,
     ))

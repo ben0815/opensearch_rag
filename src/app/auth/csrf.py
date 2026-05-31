@@ -16,7 +16,7 @@ _FORM_FIELD = "csrf_token"
 
 
 def _sign(value: str, secret: str) -> str:
-    return hmac.new(secret.encode(), value.encode(), hashlib.sha256).hexdigest()[:16]
+    return hmac.new(secret.encode(), value.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def generate_token(secret: str) -> str:

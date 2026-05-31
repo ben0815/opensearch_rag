@@ -66,7 +66,7 @@ async def create_admin_instance(
     config: LoaderConfig = Depends(get_config),
 ):
     instance = await create_instance(db, config, body.name, body.description, analyzer=body.analyzer)
-    _audit(db, admin.id, "instance_create", "instance", instance.id, {"name": instance.name, "slug": instance.slug})
+    _audit(db, admin.id, "instance_create", "instance", instance.id, {"name": instance.name, "slug": instance.slug}, ip_address=getattr(request.client, "host", None))
     await db.commit()
     return (await _build_instance_admin_out(db, instance)).model_dump(mode="json")
 
@@ -161,7 +161,7 @@ async def patch_admin_instance(
 
         instance.settings = overrides or None
 
-    _audit(db, admin.id, "instance_patch", "instance", instance.id, {"name": instance.name})
+    _audit(db, admin.id, "instance_patch", "instance", instance.id, {"name": instance.name}, ip_address=getattr(request.client, "host", None))
     instance.updated_at = _now()
     from app.loader.vector_store import invalidate_instance_cache
     invalidate_instance_cache(instance.slug)
@@ -184,7 +184,7 @@ async def delete_admin_instance(
         return
     slug = instance.slug
     await delete_instance(db, config, instance_id, redis)
-    _audit(db, admin.id, "instance_delete", "instance", instance_id, {"slug": slug})
+    _audit(db, admin.id, "instance_delete", "instance", instance_id, {"slug": slug}, ip_address=getattr(request.client, "host", None))
     await db.commit()
 
 

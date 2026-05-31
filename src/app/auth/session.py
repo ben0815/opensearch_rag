@@ -6,6 +6,9 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Session, User
 
+# Fallback-Default wenn kein Eintrag in app_settings.session_lifetime_hours vorhanden.
+# Live-Änderungen über Admin-UI wirken sofort — dieser Wert greift nur beim ersten Start
+# oder wenn die DB keinen Eintrag enthält. Nicht entfernen: wird an 3 Import-Stellen genutzt.
 SESSION_LIFETIME_HOURS = int(os.getenv("SESSION_LIFETIME_HOURS", "8"))
 
 

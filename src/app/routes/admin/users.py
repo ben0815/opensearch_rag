@@ -29,10 +29,10 @@ router = APIRouter()
 
 async def _count_remaining_admins(db: AsyncSession, exclude_id: int, also_active: bool = False) -> int:
     stmt = select(func.count()).select_from(User).where(
-        User.is_global_admin == True, User.id != exclude_id,  # noqa: E712
+        User.is_global_admin == True, User.id != exclude_id,
     )
     if also_active:
-        stmt = stmt.where(User.is_active == True)  # noqa: E712
+        stmt = stmt.where(User.is_active == True)
     return (await db.execute(stmt)).scalar_one()
 
 
@@ -129,7 +129,7 @@ async def create_user(
         created_at=now,
     )
     db.add(new_user)
-    _audit(db, admin.id, "user_pre_create", "user", None, {"ldap_uid": ldap_uid})
+    _audit(db, admin.id, "user_pre_create", "user", None, {"ldap_uid": ldap_uid}, ip_address=getattr(request.client, "host", None))
     await db.commit()
     await db.refresh(new_user)
     return user_out(new_user).model_dump(mode="json")
@@ -169,7 +169,7 @@ async def patch_user(
         target.is_active = body.is_active
         detail["is_active"] = body.is_active
 
-    _audit(db, admin.id, "user_patch", "user", user_id, detail)
+    _audit(db, admin.id, "user_patch", "user", user_id, detail, ip_address=getattr(request.client, "host", None))
     await db.commit()
     await db.refresh(target)
     return user_out(target).model_dump(mode="json")
@@ -191,7 +191,7 @@ async def delete_user(
         remaining = await _count_remaining_admins(db, user_id)
         if remaining == 0:
             raise HTTPException(status_code=409, detail="Letzten Admin nicht löschbar")
-    _audit(db, admin.id, "user_delete", "user", user_id, {"ldap_uid": target.ldap_uid})
+    _audit(db, admin.id, "user_delete", "user", user_id, {"ldap_uid": target.ldap_uid}, ip_address=getattr(request.client, "host", None))
     db.delete(target)
     await db.commit()
 
@@ -224,7 +224,7 @@ async def impersonate_user(
         is_impersonation=True,
         impersonated_by_id=admin.id,
     )
-    _audit(db, admin.id, "impersonation_start", "user", user_id, {"target_uid": target.ldap_uid})
+    _audit(db, admin.id, "impersonation_start", "user", user_id, {"target_uid": target.ldap_uid}, ip_address=getattr(request.client, "host", None))
     await db.commit()
 
     response = JSONResponse(user_out(

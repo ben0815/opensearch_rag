@@ -21,18 +21,13 @@ from app.schemas import (
 from app.services.chat_service import _DONE_SENTINEL_KEY, stream_answer
 from app.services.config_service import get_effective_config
 from app.services.user_service import get_effective_role, get_user_instances
+from app.routes.admin._shared import _like
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat")
 
 _PAGE_SIZE = 50
-
-
-def _like(q: str) -> str:
-    parts = q.split("*")
-    escaped = [p.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") for p in parts]
-    return "%" + "%".join(escaped) + "%"
 
 
 @router.post("/stream")
@@ -96,7 +91,7 @@ async def chat_stream(
             yield from stream_answer(question, instance.slug, effective_config, recent_history)
         except Exception as e:
             logger.error("Stream-Fehler für Instanz %s: %s", instance.slug, e, exc_info=True)
-            yield {"__error__": True, "message": str(e)}
+            yield {"__error__": True, "message": "Verarbeitung fehlgeschlagen"}
 
     async def _wrapped():
         async for chunk in iterate_in_threadpool(_generator()):

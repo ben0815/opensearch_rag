@@ -147,7 +147,7 @@ async def login(
             ))
             await db.commit()
         except Exception:
-            pass
+            logger.warning("Audit-Log login_failed fehlgeschlagen", exc_info=True)
         return JSONResponse({"detail": error or "Ungültige Anmeldedaten."}, status_code=401)
 
     # Erfolgreicher Login — Fehlerzähler zurücksetzen
@@ -163,7 +163,7 @@ async def login(
         ))
         await db.commit()
     except Exception:
-        pass
+        logger.warning("Audit-Log login fehlgeschlagen", exc_info=True)
 
     # Dynamic session lifetime
     lifetime_str = await get_app_setting(db, "session_lifetime_hours")

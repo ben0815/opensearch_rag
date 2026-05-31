@@ -21,8 +21,14 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     """Liest die Datenbank-URL aus der Umgebungsvariable DATABASE_URL.
-    Fällt auf den Wert in alembic.ini zurück, falls die Variable nicht gesetzt ist."""
-    return os.environ.get("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+    Bricht beim Start ab wenn DATABASE_URL fehlt, statt den Platzhalter aus alembic.ini zu nutzen."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError(
+            "Umgebungsvariable DATABASE_URL ist nicht gesetzt. "
+            "Beispiel: DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/ragdb"
+        )
+    return url
 
 
 def run_migrations_offline() -> None:

@@ -1,5 +1,6 @@
 """Admin-Endpunkte: Systemstatus."""
 import asyncio
+import os
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
@@ -27,10 +28,12 @@ async def system_status(
 
     try:
         auth = None
-        verify = True
+        verify: bool | str = True
         if config.opensearch_url.startswith("https://"):
             auth = (config.opensearch_username, config.opensearch_password)
-            verify = False
+            verify_env = os.getenv("OPENSEARCH_VERIFY_CERTS", "false").lower() == "true"
+            ca_certs = os.getenv("OPENSEARCH_CA_CERTS") or None
+            verify = ca_certs if (verify_env and ca_certs) else verify_env
         async with httpx.AsyncClient(timeout=3.0, auth=auth, verify=verify) as client:
             r_health, r_stats = await asyncio.gather(
                 client.get(f"{config.opensearch_url}/_cluster/health"),

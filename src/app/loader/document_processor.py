@@ -490,7 +490,7 @@ class DocumentProcessor:
 
             existing = await self.metadata_service.get_document_metadata(file_hash)
             if existing:
-                logger.info(f"Skipping already-indexed document: {fname}")
+                logger.info("Skipping already-indexed document: %s", fname)
                 yield {"already_indexed": True, "file_hash": file_hash}
                 return
 
@@ -548,7 +548,7 @@ class DocumentProcessor:
                     file_size=file_size,
                     page_count=total_blocks,
                     chunk_count=chunk_count,
-                    source_path=str(file_path),
+                    source_path=original_filename or file_path.name,
                     indexed_date=datetime.now(timezone.utc).isoformat(),
                     file_hash=file_hash,
                 ),
@@ -561,7 +561,7 @@ class DocumentProcessor:
             }
 
         except Exception as e:
-            logger.error(f"Error processing document {file_path}: {e}", exc_info=True)
+            logger.error("Error processing document %s: %s", file_path, e, exc_info=True)
             raise ValueError(f"Error processing document: {str(e)}") from e
 
     async def get_indexed_documents(self):

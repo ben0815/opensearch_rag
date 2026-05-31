@@ -26,7 +26,7 @@ _DN_SPECIAL = str.maketrans({
 })
 
 
-def _build_user_dn(uid: str, uid_attr: str, search_base: str) -> str:
+def build_user_dn(uid: str, uid_attr: str, search_base: str) -> str:
     return f"{uid_attr}={uid.translate(_DN_SPECIAL)},{search_base}"
 
 
@@ -80,7 +80,7 @@ def authenticate(username: str, password: str, ldap_config: dict | None = None) 
             raise
     else:
         # Direct bind: construct DN from uid_attr and search_base
-        user_dn = _build_user_dn(username, uid_attr, search_base)
+        user_dn = build_user_dn(username, uid_attr, search_base)
         try:
             conn = Connection(server, user=user_dn, password=password, auto_bind=True)
         except LDAPBindError:

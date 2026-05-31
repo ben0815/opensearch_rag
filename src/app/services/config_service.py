@@ -1,4 +1,5 @@
 """Configuration service: effective instance config, LDAP config, app settings helpers."""
+import asyncio
 import copy
 import os
 import time
@@ -78,6 +79,7 @@ async def set_app_setting(
 _LDAP_CACHE: dict | None = None
 _LDAP_CACHE_TS: float = 0.0
 _LDAP_CACHE_TTL: float = 30.0
+_LDAP_CACHE_LOCK = asyncio.Lock()
 
 _LDAP_SETTING_KEYS = (
     "ldap_url", "ldap_user_search_base", "ldap_uid_attr",
@@ -111,26 +113,32 @@ async def get_ldap_config(db: AsyncSession) -> dict:
     if _LDAP_CACHE is not None and now - _LDAP_CACHE_TS < _LDAP_CACHE_TTL:
         return _LDAP_CACHE
 
-    from app.db.models import AppSetting
-    from app.utils.crypto import decrypt
+    async with _LDAP_CACHE_LOCK:
+        # Re-check inside lock — another coroutine may have refreshed while we waited
+        now = time.monotonic()
+        if _LDAP_CACHE is not None and now - _LDAP_CACHE_TS < _LDAP_CACHE_TTL:
+            return _LDAP_CACHE
 
-    try:
-        rows = (await db.execute(
-            select(AppSetting).where(AppSetting.key.in_(_LDAP_SETTING_KEYS))
-        )).scalars().all()
+        from app.db.models import AppSetting
+        from app.utils.crypto import decrypt
 
-        cfg = _get_ldap_env_defaults()
-        for row in rows:
-            val = row.value
-            if row.key == "ldap_bind_password":
-                val = decrypt(val)
-            cfg[row.key] = val
-    except Exception:
-        cfg = _get_ldap_env_defaults()
+        try:
+            rows = (await db.execute(
+                select(AppSetting).where(AppSetting.key.in_(_LDAP_SETTING_KEYS))
+            )).scalars().all()
 
-    _LDAP_CACHE = cfg
-    _LDAP_CACHE_TS = now
-    return cfg
+            cfg = _get_ldap_env_defaults()
+            for row in rows:
+                val = row.value
+                if row.key == "ldap_bind_password":
+                    val = decrypt(val)
+                cfg[row.key] = val
+        except Exception:
+            cfg = _get_ldap_env_defaults()
+
+        _LDAP_CACHE = cfg
+        _LDAP_CACHE_TS = now
+        return cfg
 
 
 def invalidate_ldap_config_cache() -> None:

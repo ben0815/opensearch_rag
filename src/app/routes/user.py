@@ -30,7 +30,7 @@ async def get_presence(request: Request, db: AsyncSession = Depends(get_db)):
         select(Session.user_id)
         .where(
             Session.expires_at > _utcnow(),
-            Session.is_impersonation == False,  # noqa: E712
+            Session.is_impersonation == False,
             Session.user_id != current_user_id,
         )
         .distinct()
@@ -38,7 +38,7 @@ async def get_presence(request: Request, db: AsyncSession = Depends(get_db)):
     )
     stmt = select(User).where(
         User.id.in_(active_user_ids),
-        User.is_active == True,  # noqa: E712
+        User.is_active == True,
     )
     online_users = (await db.execute(stmt)).scalars().all()
 

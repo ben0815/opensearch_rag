@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import os
 import re
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -8,8 +9,7 @@ from app.loader.config import LoaderConfig
 from app.loader.vector_store import VectorStore
 from app.utils.logging_config import setup_logger
 
-import re as _re
-_ANALYZER_RE = _re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
+_ANALYZER_RE = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 
 logger = setup_logger(__name__)
 
@@ -71,7 +71,9 @@ async def delete_instance(
     use_ssl = config.opensearch_url.startswith("https://")
     ssl_kwargs: dict = {}
     if use_ssl:
-        ssl_kwargs.update(use_ssl=True, verify_certs=False, ssl_show_warn=False)
+        verify_certs = os.getenv("OPENSEARCH_VERIFY_CERTS", "false").lower() == "true"
+        ca_certs = os.getenv("OPENSEARCH_CA_CERTS") or None
+        ssl_kwargs.update(use_ssl=True, verify_certs=verify_certs, ca_certs=ca_certs, ssl_show_warn=False)
     if config.opensearch_username and config.opensearch_password:
         ssl_kwargs["http_auth"] = (config.opensearch_username, config.opensearch_password)
     client = OpenSearch(
@@ -83,7 +85,7 @@ async def delete_instance(
     try:
         await asyncio.to_thread(client.indices.delete, index=index_name, ignore_unavailable=True)
     except Exception as e:
-        logger.warning(f"Index {index_name} konnte nicht gelöscht werden: {e}")
+        logger.warning("Index %s konnte nicht gelöscht werden: %s", index_name, e)
 
     # VectorStore-Cache für diesen Slug invalidieren
     from app.loader.vector_store import invalidate_instance_cache
@@ -93,7 +95,7 @@ async def delete_instance(
     if redis is not None:
         from app.metadata.redis_service import RedisMetadataService
         deleted = await RedisMetadataService(redis, instance.slug).delete_all_documents()
-        logger.info(f"Deleted {deleted} Redis keys for instance {instance.slug}")
+        logger.info("Deleted %d Redis keys for instance %s", deleted, instance.slug)
 
     await db.delete(instance)
     await db.commit()

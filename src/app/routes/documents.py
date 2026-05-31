@@ -142,6 +142,9 @@ async def check_document_names(
     except Exception:
         raise HTTPException(status_code=400, detail="Ungültiges Format — names muss eine Liste von Strings sein")
 
+    if len(names) > 200:
+        raise HTTPException(status_code=400, detail="Maximal 200 Namen pro Anfrage")
+
     all_docs = await list_documents(redis, instance.slug)
     conflicts = []
     for name in names:
@@ -205,7 +208,8 @@ async def upload_documents(
             try:
                 await _validate_mime(upload)
             except ValueError as mime_err:
-                err_payload = json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'error', 'error': str(mime_err)})
+                logger.warning("MIME-Validierung fehlgeschlagen für %s: %s", fname, mime_err)
+                err_payload = json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'error', 'error': 'Dateityp nicht erlaubt'})
                 yield f"data: {err_payload}\n\n"
                 continue
 
@@ -290,7 +294,7 @@ async def upload_documents(
                     ))
                     await db.commit()
                 except Exception:
-                    pass
+                    logger.warning("Audit-Log doc_upload fehlgeschlagen", exc_info=True)
 
             except Exception as exc:
                 logger.error("Upload-Fehler für Datei %s: %s", fname, exc, exc_info=True)
