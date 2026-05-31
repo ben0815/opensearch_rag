@@ -7,8 +7,51 @@
 #   3. Stack starten: docker compose --profile caddy up -d
 #
 # Caddy bezieht automatisch ein TLS-Zertifikat via Let's Encrypt.
+#
+# Nach Änderungen an dieser Datei:
+#   docker compose --profile caddy restart caddy
+# (caddy reload reicht nicht — Docker Bind-Mounts für Einzeldateien folgen
+#  dem Inode; ein atomares Schreiben erzeugt einen neuen Inode, den der
+#  laufende Container erst nach einem Restart sieht.)
 
 {$DOMAIN:ki.mbgft.de} {
+
+    # Wartungsseite: greift wenn die App nicht erreichbar (502) oder nicht
+    # antwortet (504). 503 bewusst ausgenommen — die App gibt selbst 503
+    # zurück wenn ihr Wartungsmodus aktiv ist (JSON, wird vom Frontend erwartet).
+    handle_errors 502 504 {
+        header Content-Type "text/html; charset=utf-8"
+        header Retry-After "300"
+        respond `<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="60">
+  <title>Wartung</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; display: flex; justify-content: center;
+           align-items: center; min-height: 100vh; margin: 0; background: #f3f4f6; }
+    .box { text-align: center; padding: 2.5rem 2rem; background: #fff;
+           border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.08);
+           max-width: 460px; width: 90%; }
+    h1 { margin: 0 0 .75rem; font-size: 1.4rem; color: #111827; }
+    p  { margin: 0 0 .5rem; color: #6b7280; line-height: 1.5; }
+    small { color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Wartungsarbeiten</h1>
+    <p>Die Anwendung wird gerade gewartet.<br>
+       Bitte versuchen Sie es in einigen Minuten erneut.</p>
+    <p><small>Diese Seite lädt automatisch neu.</small></p>
+  </div>
+</body>
+</html>` 503
+    }
+
     reverse_proxy app:8081 {
         header_up X-Real-IP {remote_host}
         # SSE-Streams sofort flushen — ohne das puffert Caddy event: error

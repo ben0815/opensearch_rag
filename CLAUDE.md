@@ -14,8 +14,9 @@ docker compose up -d
 ```
 
 - App: http://localhost:8081
-- OpenSearch: http://localhost:9200
+- OpenSearch: http://localhost:9200 (nur lokal gebunden)
 - Ollama läuft **lokal auf dem Host** (nicht im Container), erreichbar über `host.docker.internal:11434`
+- Caddy (optionaler Reverse-Proxy): nur aktiv mit `--profile caddy`, z.B. `docker compose --profile caddy up -d`
 
 ## Konfigurationsfluss — Single Source of Truth
 
@@ -70,18 +71,23 @@ opensearch_rag/
 │       ├── App.tsx                   # BrowserRouter, AuthGuard, AdminGuard, lazy admin pages
 │       ├── api/client.ts             # Fetch-Wrapper (CSRF, credentials), alle API-Methoden
 │       ├── types/api.ts              # TypeScript-Spiegel der Pydantic-Schemas
-│       ├── stores/                   # Zustand-Stores: authStore, instanceStore, preferencesStore
+│       ├── stores/                   # Zustand-Stores: authStore, chatStore, instanceStore, preferencesStore
 │       ├── hooks/                    # useChat (SSE+AbortController), useDocumentUpload (SSE)
-│       ├── components/               # AppShell, Sidebar, InstanceSelector, MessageBubble …
+│       ├── components/               # AppShell, Sidebar, InstanceSelector, MessageBubble,
+│       │                             #   ImpersonationBanner, OnlineUsers, SourcesPanel,
+│       │                             #   ThemeToggle, ThinkingIndicator …
 │       ├── pages/                    # LoginPage, ChatPage, DocumentsPage, HistoryPage
-│       ├── pages/admin/              # AdminLayout + alle Admin-Seiten
+│       ├── pages/admin/              # AdminLayout + alle Admin-Seiten (inkl. AdminMaintenancePage)
 │       └── i18n/                     # de.json, en.json, index.ts (i18next + LanguageDetector)
 ├── infra/
-│   ├── docker-compose.yml            # 4 Services: opensearch, app, redis, postgres
+│   ├── docker-compose.yml            # 5 Services: opensearch, app, redis, postgres, caddy (caddy optional via profile)
+│   ├── docker-compose.override.yml   # Lokale Overrides (z.B. Volume-Mounts für Entwicklung)
 │   ├── .env                          # Lokale Konfiguration (nicht in Git)
 │   ├── .env.example                  # Vorlage mit allen Variablen und Kommentaren
+│   ├── caddy/                        # Caddyfile + Caddyfile.example (HTTPS-Reverse-Proxy, optional)
+│   ├── ollama.Dockerfile             # Dockerfile für Ollama im Container (auskommentiert in compose)
 │   ├── redis/redis.conf              # Redis-Persistenz- und Memory-Konfiguration
-│   ├── postgres/init.sql             # Referenzdokument (nicht mehr aktiv eingebunden)
+│   ├── postgres/init.sql             # Referenzdokument (nicht mehr aktiv eingebunden — Schema via Alembic)
 │   └── scripts/entrypoint.sh        # Führt alembic upgrade head aus, dann uvicorn
 ├── alembic.ini                       # Alembic-Konfiguration (script_location, sqlalchemy.url)
 └── alembic/
@@ -92,6 +98,7 @@ opensearch_rag/
     ├── app_fastapi.py                # Einstiegspunkt: FastAPI-App mit lifespan, Middleware, Router
     ├── ingest.py                     # CLI-Tool: python -m app.ingest --instance <slug> <pdfs>
     ├── rag.py                        # retrieve() + generate_stream(): Hybrid-Search + LLM-Chain
+    ├── schemas.py                    # Alle Pydantic-Schemas (Request/Response-Modelle) zentral
     ├── dependencies.py               # FastAPI-Abhängigkeiten: get_config(), get_redis(), limiter (slowapi)
     ├── auth/
     │   ├── ldap_service.py           # LDAP-Authentifizierung (synchron — in asyncio.to_thread aufrufen)
@@ -113,7 +120,7 @@ opensearch_rag/
     │   └── redis_service.py          # RedisMetadataService: speichert DocumentMetadata als JSON
     ├── routes/
     │   ├── auth.py                   # /api/auth/login (Rate: 10/min), /api/auth/logout, /api/auth/me
-    │   ├── user.py                   # /api/instances, /api/users/me
+    │   ├── user.py                   # /api/instances, /api/users/me, /api/users/presence
     │   ├── chat.py                   # /api/chat/stream (SSE), /api/chat/history
     │   ├── documents.py              # /api/documents/{id}, /upload (SSE), /{hash} (DELETE)
     │   └── admin/                    # /api/admin/* — aufgeteilt in Sub-Router
@@ -217,7 +224,10 @@ Global-Admin-Synchronisierung: `is_global_admin` wird beim Login nur aus LDAP ü
 
 Fallback: lokales Passwort-Hash (bcrypt) für Admin-Bootstrap ohne LDAP.
 
-Sessions werden als zufällige Tokens (32 Byte urlsafe) in PostgreSQL gespeichert. `AuthMiddleware` prüft das Cookie bei jedem Request. Session-Lifetime: `SESSION_LIFETIME_HOURS` (Standard: 8h).
+Sessions werden als zufällige Tokens (32 Byte urlsafe) in PostgreSQL gespeichert. `AuthMiddleware` prüft das Cookie bei jedem Request. Session-Lifetime: `SESSION_LIFETIME_HOURS` (Standard: 8h) — kann auch dynamisch über die `app_settings`-Tabelle (`session_lifetime_hours`) konfiguriert werden, was beim Login-Zeitpunkt greift.
+
+### Presence-Feature
+`/api/users/presence` gibt zurück, welche Benutzer gerade aktiv eine Anfrage stellen (via Redis-Keys `presence:querying:<uid>`). Feature-Toggle: `presence_enabled` in `app_settings` — bei `"false"` liefert der Endpoint eine leere Liste. Im Frontend rendert `OnlineUsers.tsx` die aktiven Nutzer in der Sidebar.
 
 ### Bedrock-Support (inaktiv)
 `langchain_aws` wird lazy importiert (nur wenn `EMBEDDER_TYPE=bedrock` oder `LLM_TYPE=bedrock`). AWS-Variablen sind in `LoaderConfig` vorhanden. Bedrock ist nicht getestet in dieser Deployment-Umgebung.

@@ -1,6 +1,7 @@
 import type {
   AdminUserCreateRequest,
   AdminUserOut,
+  CheckNamesResponse,
   DocumentOut,
   GroupOut,
   InstanceAdminOut,
@@ -122,6 +123,8 @@ export const chat = {
 export const documents = {
   list: (instanceId: number) => get<DocumentOut[]>(`/api/documents/${instanceId}`),
   delete: (instanceId: number, hash: string) => del(`/api/documents/${instanceId}/${hash}`),
+  check: (instanceId: number, names: string[]) =>
+    post<CheckNamesResponse>(`/api/documents/${instanceId}/check`, { names }),
 };
 
 // ─── Presence ─────────────────────────────────────────────────────────────────

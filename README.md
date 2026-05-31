@@ -12,7 +12,7 @@ Multi-mandantenfähige RAG-Anwendung (Retrieval-Augmented Generation) auf Basis 
 - **Chat-Verlauf**: durchsuchbar, nach Instanz filterbar; letzten 3 Frage/Antwort-Paare fließen als Gesprächskontext in Folgefragen ein
 - **Rate Limiting**: Login auf 10 Versuche/Minute, Chat-Stream auf 30 Anfragen/Minute begrenzt
 - **CSRF-Schutz**: Double-Submit-Cookie-Muster (HMAC-SHA256, stdlib); alle Fetch-Requests abgesichert; `CSRF_ENFORCE=false` für Log-only-Modus
-- **Wartungsmodus**: per Admin-UI aktivierbar; blockiert Nicht-Admins mit 503; Impersonation (Als Benutzer anmelden) für Support-Zwecke
+- **Wartungsmodus**: zwei Ebenen — App-seitig per Admin-UI (blockiert Nicht-Admins mit 503 JSON, App läuft weiter); Caddy-seitig automatisch (zeigt HTML-Wartungsseite wenn App nicht erreichbar ist, z.B. während Neustarts)
 - **Audit-Log**: alle sicherheitsrelevanten Aktionen (Login, fehlgeschlagene Logins, Dokumenten-Uploads/-Löschungen, Admin-Änderungen) mit konfigurierbarer Aufbewahrungszeit
 
 ## Voraussetzungen
@@ -323,6 +323,8 @@ docker compose --profile caddy up -d
 Caddy bezieht automatisch ein TLS-Zertifikat via Let's Encrypt (Port 80 für ACME-Challenge, 443 für HTTPS). Die App ist intern über das Docker-Netzwerk erreichbar (`app:8081`) und wird nicht mehr direkt exponiert.
 
 `infra/caddy/Caddyfile` ist in `.gitignore` — die Vorlage `infra/caddy/Caddyfile.example` liegt im Repository und kann für erweiterte Konfigurationen (eigene Zertifikate, Header, Rate-Limiting) angepasst werden.
+
+**Wartung und Neustarts:** Caddy gehört zum `caddy`-Profil und wird von `docker compose up -d` nicht angetastet. Alle anderen Container können jederzeit neu gestartet werden — Caddy zeigt währenddessen automatisch eine Wartungsseite und leitet danach selbstständig wieder zur App weiter. Nach Änderungen am Caddyfile ist `docker compose --profile caddy restart caddy` erforderlich (nicht nur `caddy reload`).
 
 ## Datenbankmigrationen (Alembic)
 

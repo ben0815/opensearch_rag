@@ -113,15 +113,27 @@ export interface PaginatedChatHistory {
 export interface DocumentOut {
   sha256: string;
   title: string;
+  display_name: string;
+  description: string;
+  valid_until: string | null;
   file_size: number;
   page_count: number;
   chunk_count: number;
   indexed_date: string;
 }
 
+export interface ConflictItem {
+  name: string;
+  hash: string;
+}
+
+export interface CheckNamesResponse {
+  conflicts: ConflictItem[];
+}
+
 export type UploadProgressEvent =
   | { file: string; index: number; total: number; progress: number }
-  | { file: string; index: number; total: number; status: "ok"; progress: 100 }
+  | { file: string; index: number; total: number; status: "ok"; progress: 100; chunk_count: number; warnings: string[] }
   | { file: string; index: number; total: number; status: "already_indexed"; progress: 100 }
   | { file: string; index: number; total: number; status: "error"; error: string }
   | { done: true; total: number };

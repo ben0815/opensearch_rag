@@ -68,6 +68,16 @@ APP_SECRET_KEY=<langer_zufälliger_wert>
 
 Caddy kommuniziert mit der App intern über `app:8081` im Docker-Netzwerk.
 
+**Wartungsseite:** Ist die App nicht erreichbar (502) oder antwortet nicht rechtzeitig (504), liefert Caddy automatisch eine Wartungsseite mit HTTP 503 aus. Benutzer müssen die Seite nicht manuell neu laden — ein `<meta refresh>` startet nach 60 Sekunden einen automatischen Reload. Der App-eigene Wartungsmodus (503 JSON) wird von Caddy nicht abgefangen.
+
+**Updates und Neustarts:** Caddy gehört zum `caddy`-Profil und wird von `docker compose up -d` (ohne `--profile caddy`) nicht angetastet. Während alle anderen Container neu starten, zeigt Caddy automatisch die Wartungsseite — ohne weiteren Eingriff.
+
+**Nach Änderungen am Caddyfile:**
+```bash
+docker compose --profile caddy restart caddy
+```
+`caddy reload` allein reicht nicht: Docker Bind-Mounts für Einzeldateien folgen dem Inode; ein atomares Schreiben erzeugt einen neuen Inode, den der laufende Container erst nach einem Restart sieht.
+
 ### postgres
 Relationale Datenbank für Anwendungsdaten.
 

@@ -155,6 +155,9 @@ class PaginatedChatHistory(BaseModel):
 class DocumentOut(BaseModel):
     sha256: str
     title: str
+    display_name: str = ""
+    description: str = ""
+    valid_until: str | None = None
     file_size: int
     page_count: int
     chunk_count: int

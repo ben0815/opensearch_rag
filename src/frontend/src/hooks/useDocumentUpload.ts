@@ -1,11 +1,21 @@
 import { useCallback, useState } from "react";
 import type { UploadProgressEvent } from "@/types/api";
 
+export interface FileUploadMeta {
+  display_name?: string;
+  description?: string;
+  sheets?: string[] | null;
+  existing_hash?: string;
+  valid_until?: string;
+}
+
 export interface UploadFileState {
   file: File;
   progress: number;
   status: "pending" | "uploading" | "ok" | "already_indexed" | "error";
   error?: string;
+  chunk_count?: number;
+  warnings?: string[];
 }
 
 export function useDocumentUpload(instanceId: number) {
@@ -18,7 +28,7 @@ export function useDocumentUpload(instanceId: number) {
   }
 
   const upload = useCallback(
-    async (selectedFiles: File[]) => {
+    async (selectedFiles: File[], metaList: FileUploadMeta[] = []) => {
       if (!selectedFiles.length || uploading) return;
 
       const initial: UploadFileState[] = selectedFiles.map((f) => ({
@@ -31,6 +41,16 @@ export function useDocumentUpload(instanceId: number) {
 
       const formData = new FormData();
       for (const f of selectedFiles) formData.append("files", f);
+
+      // Metadaten positionell zu files[] abgestimmt
+      const metadata = selectedFiles.map((_, i) => ({
+        display_name: metaList[i]?.display_name ?? "",
+        description: metaList[i]?.description ?? "",
+        sheets: metaList[i]?.sheets ?? null,
+        existing_hash: metaList[i]?.existing_hash ?? "",
+        valid_until: metaList[i]?.valid_until ?? "",
+      }));
+      formData.append("metadata", JSON.stringify(metadata));
 
       try {
         const resp = await fetch(`/api/documents/${instanceId}/upload`, {
@@ -65,6 +85,15 @@ export function useDocumentUpload(instanceId: number) {
                 prev.map((fs) => {
                   if (fs.file.name !== event.file) return fs;
                   if ("status" in event) {
+                    if (event.status === "ok") {
+                      return {
+                        ...fs,
+                        progress: 100,
+                        status: "ok" as const,
+                        chunk_count: event.chunk_count,
+                        warnings: event.warnings,
+                      };
+                    }
                     return {
                       ...fs,
                       progress: 100,

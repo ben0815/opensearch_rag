@@ -78,7 +78,7 @@ def stream_answer(question: str, instance_slug: str, config: LoaderConfig, histo
             "page": d.metadata.get("page"),
             "score": d.metadata.get("score", 0),
             "search_source": d.metadata.get("search_source"),
-            "excerpt": d.page_content[:300],
+            "excerpt": d.page_content,
         }
         for d in docs
     ]

@@ -47,6 +47,16 @@ const KNN_BOTH_BADGE = { label: "kNN", bg: "info", text: "dark" };
 function SourcesSection({ docs }: { docs: ContextDoc[] }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [expandedSet, setExpandedSet] = useState<Set<number>>(new Set());
+
+  function toggleDoc(i: number) {
+    setExpandedSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }
 
   if (docs.length === 0) return (
     <div className="mt-3 pt-3 border-top small text-body-secondary">{t("history.noSources")}</div>
@@ -66,45 +76,79 @@ function SourcesSection({ docs }: { docs: ContextDoc[] }) {
       </Button>
       {open && (
         <div className="mt-2 d-flex flex-column gap-2">
-          {docs.map((doc, i) => (
-            <div key={i} className="p-2 rounded border small">
-              <div className="d-flex justify-content-between align-items-start mb-1">
-                <span className="fw-semibold text-truncate me-2">
-                  <i className="bi bi-file-earmark-text me-1" />
-                  {doc.filename}
-                  {doc.page != null && (
-                    <Badge bg="secondary-subtle" text="secondary" className="ms-2">
-                      {t("chat.page", { page: doc.page })}
-                    </Badge>
-                  )}
-                </span>
-                <span className="d-flex align-items-center gap-1 flex-shrink-0">
-                  {doc.search_source && SOURCE_BADGES[doc.search_source] && (
-                    <>
-                      <Badge
-                        bg={SOURCE_BADGES[doc.search_source].bg}
-                        text={SOURCE_BADGES[doc.search_source].text as "dark" | undefined}
-                        style={{ fontSize: "0.6rem" }}
-                      >
-                        {SOURCE_BADGES[doc.search_source].label}
+          {docs.map((doc, i) => {
+            const isExpanded = expandedSet.has(i);
+            return (
+              <div key={i} className="rounded border small overflow-hidden">
+                <div
+                  className="d-flex justify-content-between align-items-start p-2"
+                  style={{ cursor: "pointer" }}
+                  onClick={() => toggleDoc(i)}
+                  role="button"
+                  aria-expanded={isExpanded}
+                  tabIndex={0}
+                  onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && toggleDoc(i)}
+                >
+                  <span className="fw-semibold text-truncate me-2" style={{ maxWidth: "70%" }}>
+                    <i className="bi bi-file-earmark-text me-1" />
+                    {doc.filename}
+                    {doc.page != null && (
+                      <Badge bg="secondary-subtle" text="secondary" className="ms-2">
+                        {t("chat.page", { page: doc.page })}
                       </Badge>
-                      {doc.search_source === "both" && (
-                        <Badge bg={KNN_BOTH_BADGE.bg} text={KNN_BOTH_BADGE.text as "dark"} style={{ fontSize: "0.6rem" }}>
-                          {KNN_BOTH_BADGE.label}
+                    )}
+                  </span>
+                  <span className="d-flex align-items-center gap-1 flex-shrink-0">
+                    {doc.search_source && SOURCE_BADGES[doc.search_source] && (
+                      <>
+                        <Badge
+                          bg={SOURCE_BADGES[doc.search_source].bg}
+                          text={SOURCE_BADGES[doc.search_source].text as "dark" | undefined}
+                          style={{ fontSize: "0.6rem" }}
+                        >
+                          {SOURCE_BADGES[doc.search_source].label}
                         </Badge>
-                      )}
-                    </>
-                  )}
-                  <Badge bg="primary-subtle" text="primary" className="text-nowrap">
-                    {t("chat.score", { score: doc.score.toFixed(3) })}
-                  </Badge>
-                </span>
+                        {doc.search_source === "both" && (
+                          <Badge bg={KNN_BOTH_BADGE.bg} text={KNN_BOTH_BADGE.text as "dark"} style={{ fontSize: "0.6rem" }}>
+                            {KNN_BOTH_BADGE.label}
+                          </Badge>
+                        )}
+                      </>
+                    )}
+                    <Badge bg="primary-subtle" text="primary" className="text-nowrap">
+                      {t("chat.score", { score: doc.score.toFixed(3) })}
+                    </Badge>
+                    <i className={`bi bi-chevron-${isExpanded ? "up" : "down"} text-body-secondary ms-1`} />
+                  </span>
+                </div>
+                {isExpanded ? (
+                  <div
+                    className="px-2 pb-2 pt-2 text-body-secondary"
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      maxHeight: "260px",
+                      overflowY: "auto",
+                      borderTop: "1px solid var(--bs-border-color)",
+                    }}
+                  >
+                    {doc.excerpt}
+                  </div>
+                ) : (
+                  <p
+                    className="mb-0 px-2 pb-2 text-body-secondary"
+                    style={{
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {doc.excerpt}
+                  </p>
+                )}
               </div>
-              <p className="mb-0 text-body-secondary" style={{ whiteSpace: "pre-wrap" }}>
-                {doc.excerpt}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

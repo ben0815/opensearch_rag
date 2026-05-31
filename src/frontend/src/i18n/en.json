@@ -66,7 +66,46 @@
     "noDocuments": "No documents",
     "pages": "{{count}} pages",
     "chunks": "{{count}} chunks",
-    "size": "{{size}} MB"
+    "size": "{{size}} MB",
+    "startUpload": "Start upload",
+    "displayName": {
+      "label": "Display name",
+      "placeholder": "Display name (optional)"
+    },
+    "description": {
+      "placeholder": "Add description…",
+      "hint": "Improves search results for tables and structured data"
+    },
+    "sheets": {
+      "label": "Sheets (optional, comma-separated)",
+      "placeholder": "All sheets — or: Sheet1,Sheet2"
+    },
+    "docx": {
+      "textFieldsHint": "Text boxes and drawings are not extracted."
+    },
+    "qualityIndicator": {
+      "missingDescription": "Description missing — search results may be worse",
+      "uploadAnyway": "Upload anyway"
+    },
+    "replace": {
+      "title": "Replace document?",
+      "message": "The following documents already exist: {{names}}. Replace?",
+      "confirm": "Replace"
+    },
+    "validUntil": {
+      "label": "Valid until",
+      "placeholder": "YYYY-MM-DD (optional)",
+      "hint": "Document will be marked as outdated after this date",
+      "expired": "Expired",
+      "expiresSoon": "Expires soon"
+    },
+    "warning": {
+      "encodingConverted": "Detected as {{encoding}} and converted automatically",
+      "rowLimitReached": "Row limit reached — only first {{limit}} rows processed",
+      "emptySheetsSkipped": "{{count}} empty sheets were skipped",
+      "formulasWithoutCache": "{{count}} cells contain formulas without a cached value",
+      "textTruncated": "Document too large — text was truncated to 5 MB"
+    }
   },
   "history": {
     "title": "History",
@@ -102,7 +141,11 @@
     "maintenanceHint": "When active, only admins can use the application.",
     "impersonate": "Sign in as user",
     "impersonating": "Signed in as {{user}} (on behalf of {{admin}})",
-    "stopImpersonation": "End impersonation"
+    "stopImpersonation": "End impersonation",
+    "toggleAdminGrant": "Grant admin rights",
+    "toggleAdminRevoke": "Revoke admin rights",
+    "toggleActiveDeactivate": "Deactivate user",
+    "toggleActiveActivate": "Activate user"
   },
   "instances": {
     "select": "Select instance",

@@ -68,10 +68,17 @@ async def delete_instance(
 
     # OpenSearch-Index direkt löschen — kein VectorStore erstellen (kein _ensure_index-Overhead)
     index_name = f"documents_{instance.slug}"
+    use_ssl = config.opensearch_url.startswith("https://")
+    ssl_kwargs: dict = {}
+    if use_ssl:
+        ssl_kwargs.update(use_ssl=True, verify_certs=False, ssl_show_warn=False)
+    if config.opensearch_username and config.opensearch_password:
+        ssl_kwargs["http_auth"] = (config.opensearch_username, config.opensearch_password)
     client = OpenSearch(
         hosts=[config.opensearch_url],
         connection_class=RequestsHttpConnection,
         timeout=30,
+        **ssl_kwargs,
     )
     try:
         await asyncio.to_thread(client.indices.delete, index=index_name, ignore_unavailable=True)
@@ -88,5 +95,5 @@ async def delete_instance(
         deleted = await RedisMetadataService(redis, instance.slug).delete_all_documents()
         logger.info(f"Deleted {deleted} Redis keys for instance {instance.slug}")
 
-    db.delete(instance)  # sync — markiert Objekt für Löschung, kein await
+    await db.delete(instance)
     await db.commit()

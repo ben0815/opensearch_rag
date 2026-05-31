@@ -1,10 +1,12 @@
 import json
 import logging
 import os
+import re
 import tempfile
+from datetime import datetime
 from typing import Annotated
-from fastapi import APIRouter, Depends, File, HTTPException, Path, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +25,16 @@ router = APIRouter(prefix="/api/documents")
 
 _DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
-_ALLOWED_MIME_TYPES = {"application/pdf"}
+_ALLOWED_MIME_TYPES = {
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/x-markdown",
+    "text/csv",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/zip",  # .docx/.xlsx auf libmagic < 5.39
+}
 
 
 def _sanitize_filename(name: str) -> str:
@@ -37,6 +48,16 @@ def _sanitize_filename(name: str) -> str:
     return name[:255] or "unnamed"
 
 
+def _sanitize_text(text: str, max_len: int) -> str:
+    """XSS-Bereinigung für nutzergesteuerte Freitextfelder (display_name, description).
+    Sanitisierung beim Schreiben — ungefilterte Daten dürfen nicht in Redis landen.
+    """
+    text = (text or "")[:max_len]
+    text = text.replace("<", "").replace(">", "").replace("&", "")
+    text = text.replace('"', "").replace("'", "")
+    return text
+
+
 async def _validate_mime(upload: UploadFile) -> None:
     """Prüft Magic Bytes der Datei. Wirft ValueError bei unerlaubtem Typ."""
     try:
@@ -44,6 +65,10 @@ async def _validate_mime(upload: UploadFile) -> None:
         header = await upload.read(512)
         await upload.seek(0)
         detected = _magic.from_buffer(header, mime=True)
+        # application/octet-stream ist ein generischer Fallback — libmagic kennt den Typ nicht.
+        # In dem Fall greift der bereits erfolgte Extension-Check als alleinige Validierung.
+        if detected == "application/octet-stream":
+            return
         if detected not in _ALLOWED_MIME_TYPES:
             raise ValueError(f"Ungültiger Dateityp: {detected}")
     except ImportError:
@@ -74,6 +99,9 @@ async def get_documents(
         DocumentOut(
             sha256=d.get("file_hash", ""),
             title=d.get("title", ""),
+            display_name=d.get("display_name", ""),
+            description=d.get("description", ""),
+            valid_until=d.get("valid_until"),
             file_size=d.get("file_size", 0),
             page_count=d.get("page_count", 0),
             chunk_count=d.get("chunk_count", 0),
@@ -83,12 +111,55 @@ async def get_documents(
     ]
 
 
+@router.post("/{instance_id}/check")
+@limiter.limit("10/minute", key_func=_get_user_or_ip)
+async def check_document_names(
+    instance_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    config: LoaderConfig = Depends(get_config),
+    redis=Depends(get_redis),
+):
+    """Prüft ob Dokumente mit diesen Namen bereits in der Instanz existieren.
+    Gibt für jede Übereinstimmung name + hash zurück — Client nutzt hash für Replace-Flow.
+    """
+    user = request.state.user
+    role = await get_effective_role(db, user, instance_id)
+    if role is None:
+        raise HTTPException(status_code=403, detail="Kein Zugriff auf diese Instanz")
+    if role != "manager" and not user.is_global_admin:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+
+    instance = (await db.execute(select(Instance).where(Instance.id == instance_id))).scalar_one_or_none()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instanz nicht gefunden")
+
+    try:
+        body = await request.json()
+        names = body.get("names", [])
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise ValueError
+    except Exception:
+        raise HTTPException(status_code=400, detail="Ungültiges Format — names muss eine Liste von Strings sein")
+
+    all_docs = await list_documents(redis, instance.slug)
+    conflicts = []
+    for name in names:
+        for d in all_docs:
+            if d.get("display_name") == name or d.get("title") == name:
+                conflicts.append({"name": name, "hash": d.get("file_hash", "")})
+                break
+
+    return {"conflicts": conflicts}
+
+
 @router.post("/{instance_id}/upload")
 @limiter.limit("10/minute", key_func=_get_user_or_ip)
 async def upload_documents(
     instance_id: int,
     request: Request,
     files: list[UploadFile] = File(...),
+    metadata: str = Form(default="[]"),
     db: AsyncSession = Depends(get_db),
     config: LoaderConfig = Depends(get_config),
     redis=Depends(get_redis),
@@ -101,6 +172,14 @@ async def upload_documents(
     instance = (await db.execute(select(Instance).where(Instance.id == instance_id))).scalar_one_or_none()
     if not instance:
         raise HTTPException(status_code=404, detail="Instanz nicht gefunden")
+
+    # Metadaten-JSON vor _stream parsen — HTTP 400 bei ungültigem Format, nicht 500
+    try:
+        meta_list = json.loads(metadata)
+        if not isinstance(meta_list, list):
+            raise ValueError
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Ungültiges metadata-Format")
 
     # Dynamic upload size limit from app_settings
     limit_str = await get_app_setting(db, "max_upload_mb")
@@ -130,6 +209,30 @@ async def upload_documents(
                 yield f"data: {err_payload}\n\n"
                 continue
 
+            # Per-Datei-Metadaten aus dem JSON-Array (0-indiziert, i ist 1-indiziert)
+            meta = meta_list[i - 1] if i - 1 < len(meta_list) else {}
+
+            dname = _sanitize_text(meta.get("display_name") or "", 255)
+            desc = _sanitize_text(meta.get("description") or "", 500)
+
+            sheets_raw = meta.get("sheets")
+            sheet_list = [str(s) for s in sheets_raw] if isinstance(sheets_raw, list) else None
+
+            # existing_hash für Replace-Flow: muss gültiger SHA-256-Hex-String sein
+            existing_hash = meta.get("existing_hash") or ""
+            if existing_hash and not re.match(r'^[a-f0-9]{64}$', existing_hash):
+                existing_hash = ""
+
+            # valid_until: ISO-8601 Datum (YYYY-MM-DD) oder None
+            valid_until: str | None = None
+            valid_until_raw = (meta.get("valid_until") or "").strip()
+            if valid_until_raw:
+                try:
+                    datetime.fromisoformat(valid_until_raw[:10])
+                    valid_until = valid_until_raw[:10]
+                except ValueError:
+                    pass
+
             yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'progress': 0})}\n\n"
 
             total_bytes = 0
@@ -148,11 +251,25 @@ async def upload_documents(
                 if size_exceeded:
                     raise ValueError(f'Datei zu groß (max. {max_bytes // (1024 * 1024)} MB).')
 
-                was_already_indexed = False
-                async for progress in processor.load_documents(tmp_path, original_filename=fname):
-                    if isinstance(progress, dict) and progress.get("already_indexed"):
-                        was_already_indexed = True
-                        yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'already_indexed', 'progress': 100})}\n\n"
+                async for progress in processor.load_documents(
+                    tmp_path,
+                    original_filename=fname,
+                    description=desc,
+                    display_name=dname,
+                    sheets=sheet_list,
+                    valid_until=valid_until,
+                ):
+                    if isinstance(progress, dict):
+                        if progress.get("already_indexed"):
+                            yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'already_indexed', 'progress': 100})}\n\n"
+                        elif progress.get("status") == "ok":
+                            # Upload-then-delete: altes Dokument erst nach erfolgreicher Indexierung löschen
+                            if existing_hash:
+                                try:
+                                    await delete_document(config, redis, instance.slug, existing_hash)
+                                except Exception as del_exc:
+                                    logger.warning("Replace-Delete fehlgeschlagen für %s: %s", existing_hash, del_exc)
+                            yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'status': 'ok', 'progress': 100, 'chunk_count': progress['chunk_count'], 'warnings': progress['warnings']})}\n\n"
                     else:
                         payload = {
                             'file': fname,
@@ -162,10 +279,6 @@ async def upload_documents(
                         }
                         yield f"data: {json.dumps(payload)}\n\n"
 
-                # Final ok status only for newly processed files
-                if not was_already_indexed:
-                    yield f"data: {json.dumps({'file': fname, 'index': i, 'total': total, 'progress': 100, 'status': 'ok'})}\n\n"
-
                 # Audit log
                 try:
                     db.add(AuditLog(
@@ -173,7 +286,7 @@ async def upload_documents(
                         action="doc_upload",
                         target_type="instance",
                         target_id=str(instance_id),
-                        detail={"filename": fname, "size_bytes": total_bytes},
+                        detail={"filename": fname, "size_bytes": total_bytes, "display_name": dname},
                     ))
                     await db.commit()
                 except Exception:

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { auth } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
 import { useInstanceStore } from "@/stores/instanceStore";
+import { useChatStore } from "@/stores/chatStore";
 import InstanceSelector from "./InstanceSelector";
 import OnlineUsers from "./OnlineUsers";
 import ThemeToggle from "./ThemeToggle";
@@ -23,6 +24,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   async function handleLogout() {
     await auth.logout().catch(() => {});
+    useChatStore.getState().clearChat();
     clear();
     navigate("/login");
   }

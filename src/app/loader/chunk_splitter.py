@@ -42,10 +42,12 @@ class ChunkSplitter:
         chunk_overlap: int,
         embedding_max_tokens: int = 600,
         tokenizer_model_id: str = _DEFAULT_TOKENIZER_MODEL,
+        min_chunk_size: int = 30,
     ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.embedding_max_tokens = embedding_max_tokens
+        self.min_chunk_size = min_chunk_size
         self.tokenizer = _load_tokenizer(tokenizer_model_id)
         self.text_splitter = self.get_splitter()
 
@@ -61,6 +63,9 @@ class ChunkSplitter:
             chunk_overlap=self.chunk_overlap,
             length_function=lambda text: len(tokenizer.encode(text, add_special_tokens=False)),
             separators=[
+                '\n# ',   # Markdown H1
+                '\n## ',  # Markdown H2
+                '\n### ', # Markdown H3
                 '\n\n',  # Paragraphs
                 '\n',  # Lines
                 '. ',  # Sentences with space
@@ -125,6 +130,12 @@ class ChunkSplitter:
             texts=[text],
             metadatas=[enhanced_metadata],
         )
+
+        # Kurze Chunks verwerfen (Seitenzahlen, Überschriften ohne Inhalt, leere Zeilen)
+        chunks = [
+            c for c in chunks
+            if len(self.tokenizer.encode(c.page_content, add_special_tokens=False)) >= self.min_chunk_size
+        ]
 
         # Add chunk-specific metadata
         for i, chunk in enumerate(chunks):

@@ -1,17 +1,42 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Modal, ProgressBar, Spinner, Table } from "react-bootstrap";
+import { Alert, Badge, Button, Form, Modal, ProgressBar, Spinner, Table } from "react-bootstrap";
 import { useTranslation } from "react-i18next";
 import { documents as docsApi } from "@/api/client";
 import { ApiError } from "@/api/client";
 import { useInstanceStore } from "@/stores/instanceStore";
 import { useAuthStore } from "@/stores/authStore";
-import { useDocumentUpload } from "@/hooks/useDocumentUpload";
+import { useDocumentUpload, type FileUploadMeta } from "@/hooks/useDocumentUpload";
 import type { DocumentOut } from "@/types/api";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function cleanFilename(name: string): string {
+  return name
+    .replace(/\.[^/.]+$/, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s*(v\d+|final|neu|kopie|copy)\s*/gi, " ")
+    .trim();
+}
+
+function isExpired(validUntil: string): boolean {
+  return new Date(validUntil) < new Date();
+}
+
+function isExpiringSoon(validUntil: string): boolean {
+  return !isExpired(validUntil) && new Date(validUntil).getTime() - Date.now() < 30 * 24 * 60 * 60 * 1000;
+}
+
+function fileIcon(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "pdf") return "bi-file-earmark-pdf text-danger";
+  if (ext === "docx") return "bi-file-earmark-word text-primary";
+  if (ext === "xlsx") return "bi-file-earmark-excel text-success";
+  if (ext === "csv") return "bi-file-earmark-spreadsheet text-success";
+  return "bi-file-earmark-text text-secondary";
 }
 
 export default function DocumentsPage() {
@@ -29,6 +54,10 @@ export default function DocumentsPage() {
   const [showUpload, setShowUpload] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Upload-Metadaten-State (Phase 3)
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [metaList, setMetaList] = useState<FileUploadMeta[]>([]);
 
   const canManage =
     user?.is_global_admin || selectedInstance?.role === "manager";
@@ -95,7 +124,14 @@ export default function DocumentsPage() {
 
   function handleFilePick(files: FileList | null) {
     if (!files) return;
-    void upload(Array.from(files));
+    const arr = Array.from(files);
+    setPendingFiles(arr);
+    setMetaList(arr.map((f) => ({
+      display_name: cleanFilename(f.name),
+      description: "",
+      sheets: null,
+      existing_hash: "",
+    })));
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -104,10 +140,44 @@ export default function DocumentsPage() {
     handleFilePick(e.dataTransfer.files);
   }
 
+  async function handleUpload() {
+    if (!pendingFiles.length || !selectedInstance) return;
+
+    const names = metaList.map((m, i) =>
+      (m.display_name?.trim() || cleanFilename(pendingFiles[i].name))
+    );
+
+    let resolvedMeta = metaList;
+    try {
+      const { conflicts } = await docsApi.check(selectedInstance.id, names);
+      if (conflicts.length > 0) {
+        const conflictNames = conflicts.map((c) => `"${c.name}"`).join(", ");
+        if (!confirm(t("documents.replace.message", { names: conflictNames }))) return;
+        // Existing-Hash setzen damit Backend nach erfolgreichem Upload löscht
+        resolvedMeta = metaList.map((m, i) => {
+          const conflict = conflicts.find((c) => c.name === names[i]);
+          return conflict ? { ...m, existing_hash: conflict.hash } : m;
+        });
+        setMetaList(resolvedMeta);
+      }
+    } catch {
+      // /check-Fehler: Upload trotzdem starten
+    }
+
+    void upload(pendingFiles, resolvedMeta);
+    setPendingFiles([]);
+  }
+
   function handleUploadClose() {
     setShowUpload(false);
     resetUpload();
+    setPendingFiles([]);
+    setMetaList([]);
     void loadDocs();
+  }
+
+  function updateMeta(idx: number, patch: Partial<FileUploadMeta>) {
+    setMetaList((prev) => prev.map((m, i) => (i === idx ? { ...m, ...patch } : m)));
   }
 
   if (!selectedInstance) {
@@ -179,8 +249,26 @@ export default function DocumentsPage() {
             {sortedDocs.map((doc) => (
               <tr key={doc.sha256}>
                 <td>
-                  <i className="bi bi-file-earmark-pdf text-danger me-2" />
-                  {doc.title}
+                  <i className={`bi ${fileIcon(doc.title)} me-2`} />
+                  {doc.display_name || doc.title}
+                  {doc.display_name && doc.display_name !== doc.title && (
+                    <small className="text-body-secondary ms-2">({doc.title})</small>
+                  )}
+                  {doc.valid_until && (
+                    <div className="mt-1">
+                      <Badge
+                        bg={isExpired(doc.valid_until) ? "danger" : isExpiringSoon(doc.valid_until) ? "warning" : "secondary"}
+                        text={isExpiringSoon(doc.valid_until) ? "dark" : undefined}
+                        className="small"
+                      >
+                        {isExpired(doc.valid_until)
+                          ? t("documents.validUntil.expired")
+                          : isExpiringSoon(doc.valid_until)
+                          ? `${t("documents.validUntil.expiresSoon")}: ${doc.valid_until}`
+                          : `${t("documents.validUntil.label")}: ${doc.valid_until}`}
+                      </Badge>
+                    </div>
+                  )}
                 </td>
                 <td>{doc.page_count}</td>
                 <td>{doc.chunk_count}</td>
@@ -219,7 +307,9 @@ export default function DocumentsPage() {
           <Modal.Title>{t("documents.upload")}</Modal.Title>
         </Modal.Header>
         <Modal.Body>
-          {uploadFiles.length === 0 ? (
+
+          {/* Zustand 1: Drop-Zone (keine Dateien ausgewählt, nicht am Hochladen) */}
+          {pendingFiles.length === 0 && uploadFiles.length === 0 && (
             <div
               className={`drop-zone text-center p-5 ${dragOver ? "dragover" : ""}`}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -229,17 +319,125 @@ export default function DocumentsPage() {
             >
               <i className="bi bi-cloud-upload fs-1 text-body-secondary d-block mb-2" />
               <p className="mb-1">{t("documents.uploadDrop")}</p>
-              <small className="text-body-secondary">PDF, DOCX, TXT …</small>
+              <small className="text-body-secondary">PDF, DOCX, XLSX, CSV, TXT, MD</small>
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".pdf,.docx,.txt"
+                accept=".pdf,.docx,.txt,.xlsx,.csv,.md,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/csv,text/markdown"
                 className="d-none"
                 onChange={(e) => handleFilePick(e.target.files)}
               />
             </div>
-          ) : (
+          )}
+
+          {/* Zustand 2: Metadaten-Eingabe (Dateien ausgewählt, noch nicht hochgeladen) */}
+          {pendingFiles.length > 0 && !uploading && uploadFiles.length === 0 && (
+            <div className="d-flex flex-column gap-3">
+              {pendingFiles.map((file, idx) => {
+                const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+                const isTabular = ext === "xlsx" || ext === "csv";
+                const isDocx = ext === "docx";
+                const meta = metaList[idx] ?? {};
+                const missingDesc = isTabular && !meta.description?.trim();
+
+                return (
+                  <div key={file.name} className="border rounded p-3">
+                    <div className="d-flex align-items-center gap-2 mb-2">
+                      <i className={`bi ${fileIcon(file.name)} fs-5`} />
+                      <span className="fw-semibold text-truncate">{file.name}</span>
+                      <Badge bg="secondary" className="ms-auto text-nowrap">
+                        {formatBytes(file.size)}
+                      </Badge>
+                    </div>
+
+                    {isDocx && (
+                      <Alert variant="info" className="py-1 px-2 mb-2 small">
+                        <i className="bi bi-info-circle me-1" />
+                        {t("documents.docx.textFieldsHint")}
+                      </Alert>
+                    )}
+
+                    <Form.Group className="mb-2">
+                      <Form.Label className="small mb-1">{t("documents.displayName.label")}</Form.Label>
+                      <Form.Control
+                        size="sm"
+                        type="text"
+                        maxLength={255}
+                        placeholder={t("documents.displayName.placeholder")}
+                        value={meta.display_name ?? ""}
+                        onChange={(e) => updateMeta(idx, { display_name: e.target.value })}
+                      />
+                    </Form.Group>
+
+                    {isTabular && (
+                      <Form.Group className="mb-2">
+                        <Form.Label className="small mb-1">
+                          {t("documents.description.placeholder")}
+                          <span className="text-body-secondary ms-1">
+                            ({(meta.description ?? "").length}/500)
+                          </span>
+                        </Form.Label>
+                        <Form.Control
+                          as="textarea"
+                          size="sm"
+                          rows={2}
+                          maxLength={500}
+                          placeholder={t("documents.description.placeholder")}
+                          value={meta.description ?? ""}
+                          onChange={(e) => updateMeta(idx, { description: e.target.value })}
+                        />
+                        <Form.Text className="text-body-secondary">
+                          {t("documents.description.hint")}
+                        </Form.Text>
+                      </Form.Group>
+                    )}
+
+                    {ext === "xlsx" && (
+                      <Form.Group className="mb-0">
+                        <Form.Label className="small mb-1">{t("documents.sheets.label")}</Form.Label>
+                        <Form.Control
+                          size="sm"
+                          type="text"
+                          placeholder={t("documents.sheets.placeholder")}
+                          value={meta.sheets?.join(",") ?? ""}
+                          onChange={(e) => {
+                            const val = e.target.value.trim();
+                            updateMeta(idx, {
+                              sheets: val ? val.split(",").map((s) => s.trim()).filter(Boolean) : null,
+                            });
+                          }}
+                        />
+                      </Form.Group>
+                    )}
+
+                    <Form.Group className="mb-0 mt-2">
+                      <Form.Label className="small mb-1">{t("documents.validUntil.label")}</Form.Label>
+                      <Form.Control
+                        size="sm"
+                        type="date"
+                        value={meta.valid_until ?? ""}
+                        onChange={(e) => updateMeta(idx, { valid_until: e.target.value || undefined })}
+                      />
+                      <Form.Text className="text-body-secondary">
+                        {t("documents.validUntil.hint")}
+                      </Form.Text>
+                    </Form.Group>
+
+                    {missingDesc && (
+                      <Alert variant="warning" className="py-1 px-2 mt-2 mb-0 small">
+                        <i className="bi bi-exclamation-triangle me-1" />
+                        {t("documents.qualityIndicator.missingDescription")}
+                      </Alert>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Zustand 3: Fortschritt & Ergebnisse */}
+          {(uploading || uploadFiles.length > 0) && (
             <div className="d-flex flex-column gap-3">
               {uploadFiles.map((fs) => (
                 <div key={fs.file.name}>
@@ -255,21 +453,36 @@ export default function DocumentsPage() {
                     >
                       {fs.status === "already_indexed"
                         ? t("documents.alreadyIndexed")
+                        : fs.status === "ok"
+                        ? `✓ ${fs.chunk_count ?? ""} Chunks`
                         : fs.status}
                     </Badge>
                   </div>
                   <ProgressBar
                     now={fs.progress}
                     variant={fs.status === "error" ? "danger" : "primary"}
-                    animated={fs.status === "uploading"}
+                    animated={fs.status === "uploading" || fs.status === "pending"}
                   />
                   {fs.error && <small className="text-danger">{fs.error}</small>}
+                  {fs.warnings && fs.warnings.length > 0 && (
+                    <Alert variant="warning" className="py-1 px-2 mt-1 mb-0 small">
+                      {fs.warnings.map((w, wi) => (
+                        <div key={wi}><i className="bi bi-exclamation-triangle me-1" />{w}</div>
+                      ))}
+                    </Alert>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </Modal.Body>
         <Modal.Footer>
+          {pendingFiles.length > 0 && !uploading && uploadFiles.length === 0 && (
+            <Button variant="primary" onClick={() => void handleUpload()}>
+              <i className="bi bi-upload me-1" />
+              {t("documents.startUpload")}
+            </Button>
+          )}
           <Button variant="secondary" onClick={handleUploadClose} disabled={uploading}>
             {uploading ? t("documents.uploading") : t("common.close")}
           </Button>

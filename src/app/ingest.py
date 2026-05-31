@@ -52,10 +52,12 @@ async def ingest(files: list[Path], processor: DocumentProcessor) -> tuple[int, 
         try:
             already_indexed = False
             async for progress in processor.load_documents(file):
-                if isinstance(progress, dict) and progress.get("already_indexed"):
-                    already_indexed = True
-                    print(f'\r{prefix}  (bereits indiziert, übersprungen)  ', end='', flush=True)
-                    break
+                if isinstance(progress, dict):
+                    if progress.get("already_indexed"):
+                        already_indexed = True
+                        print(f'\r{prefix}  (bereits indiziert, übersprungen)  ', end='', flush=True)
+                        break
+                    continue  # finaler ok-Dict — Generator erschöpft
                 pct = float(progress)
                 bar_len = 30
                 filled = int(bar_len * pct / 100)

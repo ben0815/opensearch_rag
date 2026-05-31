@@ -206,6 +206,7 @@ export default function AdminUsersPage() {
                       variant={user.is_global_admin ? "outline-warning" : "outline-primary"}
                       size="sm"
                       className="me-1"
+                      title={user.is_global_admin ? t("admin.toggleAdminRevoke") : t("admin.toggleAdminGrant")}
                       disabled={saving}
                       onClick={() => void handleToggleAdmin(user)}
                     >
@@ -214,6 +215,7 @@ export default function AdminUsersPage() {
                     <Button
                       variant={user.is_active ? "outline-danger" : "outline-success"}
                       size="sm"
+                      title={user.is_active ? t("admin.toggleActiveDeactivate") : t("admin.toggleActiveActivate")}
                       disabled={saving}
                       onClick={() => void handleToggleActive(user)}
                     >

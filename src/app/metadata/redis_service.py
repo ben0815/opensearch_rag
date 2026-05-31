@@ -15,6 +15,9 @@ class DocumentMetadata(BaseModel):
     """Document metadata model."""
 
     title: str
+    display_name: str = ""
+    description: str = ""
+    valid_until: str | None = None
     file_size: int
     page_count: int
     chunk_count: int

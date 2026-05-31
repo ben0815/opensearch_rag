@@ -22,8 +22,16 @@ class LoaderConfig:
         self.chunk_overlap = int(os.getenv('CHUNK_OVERLAP', '60'))
         self.supported_extensions = os.getenv(
             'SUPPORTED_EXTENSIONS',
-            '.txt,.md,.py,.pdf',
+            '.txt,.md,.pdf,.docx,.xlsx,.csv',
         ).split(',')
+        self.max_csv_rows = int(os.getenv('MAX_CSV_ROWS', '10000'))
+        self.max_xlsx_rows = int(os.getenv('MAX_XLSX_ROWS', '10000'))
+        _xlsx_cap = os.getenv('XLSX_MAX_ROWS_PER_BLOCK')
+        self.xlsx_max_rows_per_block: int | None = int(_xlsx_cap) if _xlsx_cap else None
+        _csv_cap = os.getenv('CSV_MAX_ROWS_PER_BLOCK')
+        self.csv_max_rows_per_block: int | None = int(_csv_cap) if _csv_cap else None
+        # Chunks unter diesem Token-Schwellwert werden verworfen (Seiten-/Kapitelzahlen, leere Zeilen etc.)
+        self.min_chunk_size = int(os.getenv('MIN_CHUNK_SIZE', '30'))
         # bge-m3 produces 1024-dimensional vectors (up to 8192 token input)
         self.embedding_size = int(os.getenv('EMBEDDING_SIZE', '1024'))
         # Max tokens per chunk before embedding; 600 leaves room for ~100 token neighbor context on each side

@@ -66,7 +66,46 @@
     "noDocuments": "Keine Dokumente vorhanden",
     "pages": "{{count}} Seiten",
     "chunks": "{{count}} Chunks",
-    "size": "{{size}} MB"
+    "size": "{{size}} MB",
+    "startUpload": "Hochladen starten",
+    "displayName": {
+      "label": "Anzeigename",
+      "placeholder": "Anzeigename (optional)"
+    },
+    "description": {
+      "placeholder": "Beschreibung hinzufügen…",
+      "hint": "Verbessert Suchergebnisse bei Tabellen und strukturierten Daten"
+    },
+    "sheets": {
+      "label": "Sheets (optional, kommagetrennt)",
+      "placeholder": "Alle Sheets — oder: Sheet1,Sheet2"
+    },
+    "docx": {
+      "textFieldsHint": "Textfelder und Zeichnungen werden nicht extrahiert."
+    },
+    "qualityIndicator": {
+      "missingDescription": "Beschreibung fehlt — Suchergebnisse können schlechter sein",
+      "uploadAnyway": "Trotzdem hochladen"
+    },
+    "replace": {
+      "title": "Dokument ersetzen?",
+      "message": "Folgende Dokumente existieren bereits: {{names}}. Ersetzen?",
+      "confirm": "Ersetzen"
+    },
+    "validUntil": {
+      "label": "Gültig bis",
+      "placeholder": "TT.MM.JJJJ (optional)",
+      "hint": "Dokument wird nach diesem Datum als veraltet markiert",
+      "expired": "Abgelaufen",
+      "expiresSoon": "Läuft bald ab"
+    },
+    "warning": {
+      "encodingConverted": "Als {{encoding}} erkannt und automatisch konvertiert",
+      "rowLimitReached": "Zeilenlimit erreicht — nur erste {{limit}} Zeilen verarbeitet",
+      "emptySheetsSkipped": "{{count}} leere Sheets wurden nicht verarbeitet",
+      "formulasWithoutCache": "{{count}} Zellen enthalten Formeln ohne berechneten Wert",
+      "textTruncated": "Dokument zu groß — Text wurde auf 5 MB begrenzt"
+    }
   },
   "history": {
     "title": "Verlauf",
@@ -102,7 +141,11 @@
     "maintenanceHint": "Wenn aktiv, können nur Admins die Anwendung nutzen.",
     "impersonate": "Als Benutzer anmelden",
     "impersonating": "Angemeldet als {{user}} (vertreten durch {{admin}})",
-    "stopImpersonation": "Vertretung beenden"
+    "stopImpersonation": "Vertretung beenden",
+    "toggleAdminGrant": "Admin-Rechte vergeben",
+    "toggleAdminRevoke": "Admin-Rechte entziehen",
+    "toggleActiveDeactivate": "Benutzer deaktivieren",
+    "toggleActiveActivate": "Benutzer aktivieren"
   },
   "instances": {
     "select": "Instanz wählen",
